@@ -53,7 +53,7 @@ char pass[] = "";
 // APRS parameters
 const char *aprsServer = "cwop5.aprs.net";
 const int   aprsPort = 14580;
-const char *aprsCallSign = "FW0728";
+const char *aprsCallSign = "FW0727";
 const char *aprsPassCode = "-1";
 const char *aprsLocation = "2455.29N/04527.08E_";
 const char *aprsPath = ">APRS,TCPIP*:";
