@@ -25,7 +25,7 @@
 */
 
 // The DEBUG and DEVEL flag
-//#define DEBUG
+#define DEBUG
 //#define DEVEL
 
 // The sensors are connected to I2C
@@ -42,7 +42,7 @@
 
 // Device name
 char *NODENAME = "WxUnoGPRS";
-char *VERSION = "1.1";
+char *VERSION = "1.3";
 bool  PROBE = true;    // True if the station is being probed
 
 // GPRS credentials
@@ -55,16 +55,18 @@ const char *aprsServer = "cwop5.aprs.net";
 const int   aprsPort = 14580;
 const char *aprsCallSign = "FW0727";
 const char *aprsPassCode = "-1";
-const char *aprsLocation = "2455.29N/04527.08E_";
+const char *aprsLocation = "4455.29N/02527.08E_";
 const char *aprsPath = ">APRS,TCPIP*:";
-const int   altMeters = 83; // 282
+const int   altMeters = 282;
 const long  altFeet = (long)(altMeters * 3.28084);
 float altCorr = pow((float)(1.0 - 2.25577e-5 * altMeters), (float)(-5.25578));
+
 // Reports and measurements
 const int   aprsRprtHour = 10;  // Number of APRS reports per hour
 const int   aprsMsrmMax = 3;    // Number of measurements per report (keep even)
 int         aprsMsrmCount = 0;  // Measurements counter
 int         aprsTlmSeq = 0;     // Telemetry sequence mumber
+
 // Telemetry bits
 char        aprsTlmBits = B00000000;
 
@@ -73,7 +75,8 @@ SoftwareSerial SerialAT(2, 3); // RX, TX
 M590Drv GPRS_Modem;
 M590Client APRS_Client(&GPRS_Modem);
 IPAddress ip;
-String pkt = "";
+// The APRS packet buffer
+char aprsPkt[120] = "";
 
 // Statistics (median filter for the last 3 values)
 int rmTemp[4];
@@ -111,10 +114,10 @@ void mdnIn(int *buf, int x) {
 }
 
 void aprsSend(const char *pkt) {
+  APRS_Client.write((uint8_t *)pkt, strlen(pkt));
 #ifdef DEBUG
   Serial.print(pkt);
 #endif
-  APRS_Client.print(pkt);
 }
 
 void aprsSend(const __FlashStringHelper *pkt) {
@@ -159,25 +162,16 @@ char *aprsTime() {
   user FW0690 pass -1 vers WxUno 0.2"
 */
 void aprsAuthenticate() {
-  pkt  = F("user ");
-  pkt += aprsCallSign;
-  pkt += F(" pass ");
-  pkt += aprsPassCode;
-  pkt += F(" vers ");
-  pkt += NODENAME;
-  pkt += F(" ");
-  pkt += VERSION;
-  pkt += F("\r\n");
-  aprsSend(pkt);
-  //aprsSend(F("user "));
-  //aprsSend(aprsCallSign);
-  //aprsSend(F(" pass "));
-  //aprsSend(aprsPassCode);
-  //aprsSend(F(" vers "));
-  //aprsSend(NODENAME);
-  //aprsSend(F(" "));
-  //aprsSend(VERSION);
-  //aprsSendCRLF();
+  strcpy_P(aprsPkt, PSTR("user "));
+  strcat(aprsPkt, aprsCallSign);
+  strcat_P(aprsPkt, PSTR(" pass "));
+  strcat(aprsPkt, aprsPassCode);
+  strcat_P(aprsPkt, PSTR(" vers "));
+  strcat(aprsPkt, NODENAME);
+  strcat_P(aprsPkt, PSTR(" "));
+  strcat(aprsPkt, VERSION);
+  strcat_P(aprsPkt, PSTR("\r\n"));
+  aprsSend(aprsPkt);
 }
 
 /**
@@ -190,93 +184,49 @@ void aprsAuthenticate() {
   @param lux illuminance
 */
 void aprsSendWeather(int temp, int hmdt, int pres, int lux) {
-  pkt  = aprsCallSign;
-  pkt += aprsPath;
-  pkt += F("@");
-  // Compose the APRS packet
-  pkt += aprsTime();
-  pkt += aprsLocation;
-  // Wind
-  pkt += F(".../...g...");
+  strcpy(aprsPkt, aprsCallSign);
+  strcat(aprsPkt, aprsPath);
+  strcat_P(aprsPkt, PSTR("@"));
+  strcat(aprsPkt, aprsTime());
+  strcat(aprsPkt, aprsLocation);
+  // Wind (unavailable)
+  strcat_P(aprsPkt, PSTR(".../...g..."));
   // Temperature
   if (temp >= -460) { // 0K in F
     char buf[5];
     sprintf_P(buf, PSTR("t%03d"), temp);
-    pkt += buf;
+    strcat(aprsPkt, buf);
   }
   else {
-    pkt += F("t...");
+    strcat_P(aprsPkt, PSTR("t..."));
   }
   // Humidity
   if (hmdt >= 0) {
     if (hmdt == 100) {
-      pkt += F("h00");
+      strcat_P(aprsPkt, PSTR("h00"));
     }
     else {
       char buf[5];
       sprintf_P(buf, PSTR("h%02d"), hmdt);
-      pkt += buf;
+      strcat(aprsPkt, buf);
     }
   }
   // Athmospheric pressure
   if (pres >= 0) {
     char buf[7];
     sprintf_P(buf, PSTR("b%05d"), pres);
-    pkt += buf;
+    strcat(aprsPkt, buf);
   }
   // Illuminance, if valid
   if (lux >= 0) {
     char buf[5];
     sprintf_P(buf, PSTR("L%02d"), (int)(lux * 0.0079));
-    pkt += buf;
+    strcat(aprsPkt, buf);
   }
   // Comment (device name)
-  pkt += NODENAME;
-  pkt += F("\r\n");
-  aprsSend(pkt);
-}
-void aprsSendWeather_OLD(int temp, int hmdt, int pres, int lux) {
-  aprsSendHeader("@");
-  // Compose the APRS packet
-  aprsSend(aprsTime());
-  aprsSend(aprsLocation);
-  // Wind
-  aprsSend(F(".../...g..."));
-  // Temperature
-  if (temp >= -460) { // 0K in F
-    char buf[5];
-    sprintf_P(buf, PSTR("t%03d"), temp);
-    aprsSend(buf);
-  }
-  else {
-    aprsSend(F("t..."));
-  }
-  // Humidity
-  if (hmdt >= 0) {
-    if (hmdt == 100) {
-      aprsSend(F("h00"));
-    }
-    else {
-      char buf[5];
-      sprintf_P(buf, PSTR("h%02d"), hmdt);
-      aprsSend(buf);
-    }
-  }
-  // Athmospheric pressure
-  if (pres >= 0) {
-    char buf[7];
-    sprintf_P(buf, PSTR("b%05d"), pres);
-    aprsSend(buf);
-  }
-  // Illuminance, if valid
-  if (lux >= 0) {
-    char buf[5];
-    sprintf_P(buf, PSTR("L%03d"), (int)(lux * 0.0079));
-    aprsSend(buf);
-  }
-  // Comment (device name)
-  aprsSend(NODENAME);
-  aprsSendCRLF();
+  strcat(aprsPkt, NODENAME);
+  strcat_P(aprsPkt, PSTR("\r\n"));
+  aprsSend(aprsPkt);
 }
 
 /**
@@ -296,32 +246,17 @@ void aprsSendTelemetry(int a0, int a1, int rssi, int vcc, int temp, byte bits) {
   // Send the telemetry setup on power up (first minutes) or if the sequence number is 0
   if ((aprsTlmSeq == 0) or (millis() < snsDelay + snsDelay)) aprsSendTelemetrySetup();
   // Compose the APRS packet
-  pkt  = aprsCallSign;
-  pkt += aprsPath;
-  pkt += F("T");
+  strcpy(aprsPkt, aprsCallSign);
+  strcat(aprsPkt, aprsPath);
+  strcat_P(aprsPkt, PSTR("T"));
   char buf[40];
   sprintf_P(buf, PSTR("#%03d,%03d,%03d,%03d,%03d,%03d,"), aprsTlmSeq, a0, a1, rssi, vcc, temp);
-  pkt += buf;
+  strcat(aprsPkt, buf);
   char bbuf[10];
   itoa(bits, bbuf, 2);
-  pkt += bbuf;
-  pkt += F("\r\n");
-  aprsSend(pkt);
-}
-void aprsSendTelemetry_OLD(int a0, int a1, int rssi, int vcc, int temp, byte bits) {
-  // Increment the telemetry sequence number, reset it if exceeds 999
-  if (++aprsTlmSeq > 999) aprsTlmSeq = 0;
-  // Send the telemetry setup on power up (first minutes) or if the sequence number is 0
-  if ((aprsTlmSeq == 0) or (millis() < snsDelay + snsDelay)) aprsSendTelemetrySetup();
-  // Compose the APRS packet
-  aprsSendHeader("T");
-  char buf[40];
-  sprintf_P(buf, PSTR("#%03d,%03d,%03d,%03d,%03d,%03d,"), aprsTlmSeq, a0, a1, rssi, vcc, temp);
-  aprsSend(buf);
-  char bbuf[10];
-  itoa(bits, bbuf, 2);
-  aprsSend(bbuf);
-  aprsSendCRLF();
+  strcat(aprsPkt, bbuf);
+  strcat_P(aprsPkt, PSTR("\r\n"));
+  aprsSend(aprsPkt);
 }
 
 /**
@@ -331,68 +266,40 @@ void aprsSendTelemetrySetup() {
   char padCallSign[10];
   sprintf_P(padCallSign, PSTR("%-9s"), aprsCallSign);
   // Parameter names
-  pkt  = aprsCallSign;
-  pkt += aprsPath;
-  pkt += F(":");
-  pkt += padCallSign;
-  pkt += F(":PARM.Light,Thrm,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,BAT,TM,B7,B8");
-  pkt += F("\r\n");
-  aprsSend(pkt);
+  strcpy(aprsPkt, aprsCallSign);
+  strcat(aprsPkt, aprsPath);
+  strcat_P(aprsPkt, PSTR(":"));
+  strcat(aprsPkt, padCallSign);
+  strcat_P(aprsPkt, PSTR(":PARM.Light,Thrm,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,BAT,TM,B7,B8"));
+  strcat_P(aprsPkt, PSTR("\r\n"));
+  aprsSend(aprsPkt);
   // Equations
-  pkt  = aprsCallSign;
-  pkt += aprsPath;
-  pkt += F(":");
-  pkt += padCallSign;
-  pkt += F(":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100");
-  pkt += F("\r\n");
-  aprsSend(pkt);
+  strcpy(aprsPkt, aprsCallSign);
+  strcat(aprsPkt, aprsPath);
+  strcat_P(aprsPkt, PSTR(":"));
+  strcat(aprsPkt, padCallSign);
+  strcat_P(aprsPkt, PSTR(":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100"));
+  strcat_P(aprsPkt, PSTR("\r\n"));
+  aprsSend(aprsPkt);
   // Units
-  pkt  = aprsCallSign;
-  pkt += aprsPath;
-  pkt += F(":");
-  pkt += padCallSign;
-  pkt += F(":UNIT.lux,mV,dBm,V,C,prb,on,on,sat,low,err,N/A,N/A");
-  pkt += F("\r\n");
-  aprsSend(pkt);
+  strcpy(aprsPkt, aprsCallSign);
+  strcat(aprsPkt, aprsPath);
+  strcat_P(aprsPkt, PSTR(":"));
+  strcat(aprsPkt, padCallSign);
+  strcat_P(aprsPkt, PSTR(":UNIT.lux,mV,dBm,V,C,prb,on,on,sat,low,err,N/A,N/A"));
+  strcat_P(aprsPkt, PSTR("\r\n"));
+  aprsSend(aprsPkt);
   // Bit sense and project name
-  pkt  = aprsCallSign;
-  pkt += aprsPath;
-  pkt += F(":");
-  pkt += padCallSign;
-  pkt += F(":BITS.10011111, ");
-  pkt += NODENAME;
-  pkt += F("/");
-  pkt += VERSION;
-  pkt += F("\r\n");
-  aprsSend(pkt);
-}
-
-void aprsSendTelemetrySetup_OLD() {
-  char padCallSign[10];
-  sprintf_P(padCallSign, PSTR("%-9s"), aprsCallSign);
-  // Parameter names
-  aprsSendHeader(":");
-  aprsSend(padCallSign);
-  aprsSend(F(":PARM.Light,Thrm,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,BAT,TM,B7,B8"));
-  aprsSendCRLF();
-  // Equations
-  aprsSendHeader(":");
-  aprsSend(padCallSign);
-  aprsSend(F(":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100"));
-  aprsSendCRLF();
-  // Units
-  aprsSendHeader(":");
-  aprsSend(padCallSign);
-  aprsSend(F(":UNIT.lux,mV,dBm,V,C,prb,off,off,sat,low,err,N/A,N/A"));
-  aprsSendCRLF();
-  // Bit sense and project name
-  aprsSendHeader(":");
-  aprsSend(padCallSign);
-  aprsSend(F(":BITS.10011111, "));
-  aprsSend(NODENAME);
-  aprsSend(F("/"));
-  aprsSend(VERSION);
-  aprsSendCRLF();
+  strcpy(aprsPkt, aprsCallSign);
+  strcat(aprsPkt, aprsPath);
+  strcat_P(aprsPkt, PSTR(":"));
+  strcat(aprsPkt, padCallSign);
+  strcat_P(aprsPkt, PSTR(":BITS.10011111, "));
+  strcat(aprsPkt, NODENAME);
+  strcat_P(aprsPkt, PSTR("/"));
+  strcat(aprsPkt, VERSION);
+  strcat_P(aprsPkt, PSTR("\r\n"));
+  aprsSend(aprsPkt);
 }
 
 /**
@@ -405,9 +312,12 @@ void aprsSendStatus(const char *message) {
   // Send only if the message is not empty
   if (message[0] != '\0') {
     // Send the APRS packet
-    aprsSendHeader(">");
-    aprsSend(message);
-    aprsSendCRLF();
+    strcpy(aprsPkt, aprsCallSign);
+    strcat(aprsPkt, aprsPath);
+    strcat_P(aprsPkt, PSTR(">"));
+    strcat(aprsPkt, message);
+    strcat_P(aprsPkt, PSTR("\r\n"));
+    aprsSend(aprsPkt);
   }
 }
 
@@ -419,14 +329,17 @@ void aprsSendStatus(const char *message) {
 */
 void aprsSendPosition(const char *comment) {
   // Compose the APRS packet
-  aprsSendHeader("!");
-  aprsSend(aprsLocation);
-  aprsSend(F("/000/000/A="));
+  strcpy(aprsPkt, aprsCallSign);
+  strcat(aprsPkt, aprsPath);
+  strcat_P(aprsPkt, PSTR("!"));
+  strcat(aprsPkt, aprsLocation);
+  strcat_P(aprsPkt, PSTR("/000/000/A="));
   char buf[7];
   sprintf_P(buf, PSTR("%06d"), altFeet);
-  aprsSend(buf);
-  aprsSend(comment);
-  aprsSendCRLF();
+  strcat(aprsPkt, buf);
+  strcat(aprsPkt, comment);
+  strcat_P(aprsPkt, PSTR("\r\n"));
+  aprsSend(aprsPkt);
 }
 
 int readMCUTemp() {
@@ -514,8 +427,6 @@ void setup() {
   Serial.println(NODENAME);
   Serial.println(__DATE__);
 
-  pkt.reserve(120);
-
   // Set GSM module baud rate
   SerialAT.begin(9600);
   GPRS_Modem.begin(&SerialAT, SIM_PRESENT);
@@ -583,12 +494,18 @@ void loop() {
     int a1 = analogRead(A1);
 
     // Median Filter
-    mdnIn(rmA0, ((unsigned long)vcc * (unsigned long)a0) / 20480);
+    mdnIn(rmA0, ((unsigned long)vcc * (1023UL - (unsigned long)a0)) / 20480);
     mdnIn(rmA1, ((unsigned long)vcc * (unsigned long)a1) / 20480);
     mdnIn(rmVcc, vcc);
 
+    // Upper part
     // 500 / R(kO); R = R0(1023/x-1)
-    int lux = 51150L / a0 - 50;
+    // Lower part
+    // Vout=RawADC0*0.0048828125;
+    // lux=(2500/Vout-500)/10;
+
+    //int lux = 51150L / a0 - 50;
+    long lux = 50L * (1024L - a0) / a0;  // illuminance value in lux
 
     // APRS (after the first 3600/(aprsMsrmMax*aprsRprtHour) seconds,
     //       then every 60/aprsRprtHour minutes)
