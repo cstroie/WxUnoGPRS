@@ -410,10 +410,16 @@ void setup() {
   // Set GSM module baud rate
   SerialAT.begin(9600);
   GPRS_Modem.begin(&SerialAT, SIM_PRESENT);
-  char str[20];
+  char str[30];
+  GPRS_Modem.get_gmr(str, sizeof(str));
+  Serial.println(str);
   GPRS_Modem.get_imei(str, sizeof(str));
   Serial.println(str);
-
+  GPRS_Modem.get_cclk(str, sizeof(str));
+  Serial.println(str);
+  GPRS_Modem.get_cops(str, sizeof(str));
+  Serial.println(str);
+  
   // Start time sync
   setSyncProvider(getUNIXTime);
   setSyncInterval(60 * 60);
