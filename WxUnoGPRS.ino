@@ -5,18 +5,18 @@
 
   This file is part of Weather Station.
 
-  WxUno is free software: you can redistribute it and/or modify
+  WxUnoGPRS is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by the Free
   Software Foundation, either version 3 of the License, or (at your option) any
   later version.
 
-  WxUno is distributed in the hope that it will be useful, but
+  WxUnoGPRS is distributed in the hope that it will be useful, but
   WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
   more details.
 
   You should have received a copy of the GNU General Public License along with
-  WxUno.  If not, see <http://www.gnu.org/licenses/>.
+  WxUnoGPRS.  If not, see <http://www.gnu.org/licenses/>.
 
 
   WiFi connected weather station, reading the athmospheric sensor BME280 and
@@ -26,7 +26,7 @@
 
 // The DEBUG and DEVEL flag
 #define DEBUG
-//#define DEVEL
+#define DEVEL
 
 // The sensors are connected to I2C
 #include <Wire.h>
@@ -53,7 +53,11 @@ char pass[] = "";
 // APRS parameters
 const char *aprsServer = "cwop5.aprs.net";
 const int   aprsPort = 14580;
-const int   altMeters = 282;
+#ifdef DEVEL
+const int   altMeters = 83;   // Bucharest
+#else
+const int   altMeters = 282;  // Targoviste
+#endif
 const long  altFeet = (long)(altMeters * 3.28084);
 float altCorr = pow((float)(1.0 - 2.25577e-5 * altMeters), (float)(-5.25578));
 
@@ -138,7 +142,7 @@ char *aprsTime() {
 
 /**
   Send APRS authentication data
-  user FW0690 pass -1 vers WxUno 0.2"
+  user FW0690 pass -1 vers WxUnoGPRS 0.2"
 */
 void aprsAuthenticate() {
   strcpy_P(aprsPkt, PSTR("user "));
@@ -155,7 +159,7 @@ void aprsAuthenticate() {
 
 /**
   Send APRS weather data, then try to get the forecast
-  FW0690>APRS,TCPIP*:@152457h4427.67N/02608.03E_.../...g...t044h86b10201L001WxUno
+  FW0690>APRS,TCPIP*:@152457h4427.67N/02608.03E_.../...g...t044h86b10201L001WxUnoGPRS
 
   @param temp temperature
   @param hmdt humidity
@@ -377,17 +381,17 @@ time_t getUNIXTime() {
   } uxtm;
 
   // Try to establish the PPP link
-  // FIXME blocker
-  while (!GPRS_Modem.ppp_connect(apn)) delay(1000);
-
   int i = 3;
-  if (APRS_Client.connect("utcnist.colorado.edu", 37)) {
-    unsigned int timeout = millis() + 10000UL;   // 10 seconds timeout
-    while (millis() <= timeout and i >= 0) {
-      if (APRS_Client.available()) uxtm.b[i--] = APRS_Client.read();
+  if (GPRS_Modem.pppConnect(apn)) {
+    if (APRS_Client.connect("utcnist.colorado.edu", 37)) {
+      unsigned int timeout = millis() + 10000UL;   // 10 seconds timeout
+      while (millis() <= timeout and i >= 0) {
+        if (APRS_Client.available()) uxtm.b[i--] = APRS_Client.read();
+      }
+      APRS_Client.stop();
     }
-    APRS_Client.stop();
   }
+
   if (i < 0) {
     uint32_t tm = uxtm.t - 2208988800UL;
     Serial.print(F("Time sync: "));
@@ -400,6 +404,10 @@ time_t getUNIXTime() {
   }
 }
 
+void softReset() {
+  asm volatile ("  jmp 0");
+}
+
 void setup() {
   // Init the serial com
   Serial.println();
@@ -409,17 +417,9 @@ void setup() {
 
   // Set GSM module baud rate
   SerialAT.begin(9600);
+  // FIXME Do not continue without modem
   GPRS_Modem.begin(&SerialAT, SIM_PRESENT);
-  char str[30];
-  GPRS_Modem.get_gmr(str, sizeof(str));
-  Serial.println(str);
-  GPRS_Modem.get_imei(str, sizeof(str));
-  Serial.println(str);
-  GPRS_Modem.get_cclk(str, sizeof(str));
-  Serial.println(str);
-  GPRS_Modem.get_cops(str, sizeof(str));
-  Serial.println(str);
-  
+
   // Start time sync
   setSyncProvider(getUNIXTime);
   setSyncInterval(60 * 60);
@@ -435,7 +435,7 @@ void setup() {
   }
 
   // Initialize the random number generator and set the APRS telemetry start sequence
-  randomSeed(readMCUTemp() + now() + GPRS_Modem.get_rssi() + readVcc() + millis());
+  randomSeed(readMCUTemp() + now() + GPRS_Modem.getRSSI() + readVcc() + millis());
   aprsTlmSeq = random(1000);
 
   // Start the sensor timer
@@ -496,11 +496,17 @@ void loop() {
     // APRS (after the first 3600/(aprsMsrmMax*aprsRprtHour) seconds,
     //       then every 60/aprsRprtHour minutes)
     if (aprsMsrmCount == 1) {
-      // Try to establish the PPP link
-      // FIXME blocker
-      while (!GPRS_Modem.ppp_connect(apn)) delay(1000);
+      // Wake up the modem
+      GPRS_Modem.funWork();
+      // Try to establish the PPP link, restart if failed
+      if (!GPRS_Modem.pppConnect(apn)) {
+        Serial.println(F("Restarting the modem and myself."));
+        GPRS_Modem.restart();
+        delay(5000);
+        softReset();
+      }
       // Get RSSI
-      int rssi = GPRS_Modem.get_rssi();
+      int rssi = GPRS_Modem.getRSSI();
       // Connect to APRS server
       if (APRS_Client.connect(aprsServer, aprsPort)) {
         aprsAuthenticate();
@@ -513,6 +519,8 @@ void loop() {
         APRS_Client.stop();
       }
       else Serial.println(F("Connection failed"));
+      // Send the modem to sleep
+      GPRS_Modem.funSleep();
     }
 
     // Repeat sensor reading
