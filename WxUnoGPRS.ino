@@ -25,7 +25,7 @@
 */
 
 // The DEBUG and DEVEL flag
-#define DEBUG
+//#define DEBUG
 #define DEVEL
 
 // The sensors are connected to I2C
@@ -480,8 +480,8 @@ void loop() {
     int a1 = analogRead(A1);
 
     // Median Filter
-    mdnIn(rmA0, ((unsigned long)vcc * (1023UL - (unsigned long)a0)) / 20480);
-    mdnIn(rmA1, ((unsigned long)vcc * (unsigned long)a1) / 20480);
+    mdnIn(rmA0, (5000 * (1023UL - (unsigned long)a0)) / 20480);
+    mdnIn(rmA1, (5000 * (unsigned long)a1) / 20480);
     mdnIn(rmVcc, vcc);
 
     // Upper part
