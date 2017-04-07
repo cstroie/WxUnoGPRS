@@ -42,7 +42,7 @@
 
 // Device name
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "1.3";
+const char VERSION[]  PROGMEM = "1.4";
 bool  PROBE = true;    // True if the station is being probed
 
 // GPRS credentials
@@ -67,7 +67,7 @@ const char aprsPath[]     PROGMEM = ">APRS,TCPIP*:";
 const char aprsLocation[] PROGMEM = "4455.29N/02527.08E_";
 const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Thrm,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,BAT,TM,B7,B8";
 const char aprsTlmEQNS[]  PROGMEM = ":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100";
-const char aprsTlmUNIT[]  PROGMEM = ":UNIT.lux,mV,dBm,V,C,prb,on,on,sat,low,err,N/A,N/A";
+const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,low,err,N/A,N/A";
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10011111, ";
 const char eol[]          PROGMEM = "\r\n";
 
@@ -386,7 +386,8 @@ time_t getUNIXTime() {
     if (APRS_Client.connect("utcnist.colorado.edu", 37)) {
       unsigned int timeout = millis() + 10000UL;   // 10 seconds timeout
       while (millis() <= timeout and i >= 0) {
-        if (APRS_Client.available()) uxtm.b[i--] = APRS_Client.read();
+        char b = APRS_Client.read();
+        if (b != -1) uxtm.b[i--] = uint8_t(b);
       }
       APRS_Client.stop();
     }
@@ -497,12 +498,9 @@ void loop() {
     //       then every 60/aprsRprtHour minutes)
     if (aprsMsrmCount == 1) {
       // Wake up the modem
-      GPRS_Modem.funWork();
       // Try to establish the PPP link, restart if failed
       if (!GPRS_Modem.pppConnect(apn)) {
-        Serial.println(F("Restarting the modem and myself."));
-        GPRS_Modem.restart();
-        delay(5000);
+        Serial.println(F("Restarting myself..."));
         softReset();
       }
       // Get RSSI
@@ -520,7 +518,6 @@ void loop() {
       }
       else Serial.println(F("Connection failed"));
       // Send the modem to sleep
-      GPRS_Modem.funSleep();
     }
 
     // Repeat sensor reading
