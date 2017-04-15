@@ -500,24 +500,25 @@ void loop() {
       // Wake up the modem
       // Try to establish the PPP link, restart if failed
       if (!GPRS_Modem.pppConnect(apn)) {
-        Serial.println(F("Restarting myself..."));
-        softReset();
+        Serial.println(F("PPP link failed"));
       }
-      // Get RSSI
-      int rssi = GPRS_Modem.getRSSI();
-      // Connect to APRS server
-      if (APRS_Client.connect(aprsServer, aprsPort)) {
-        aprsAuthenticate();
-        //aprsSendPosition(" WxUnoProbe");
-        if (atmo_ok) aprsSendWeather(mdnOut(rmTemp), -1, mdnOut(rmPres), lux);
-        //aprsSendWeather(rmTemp.out(), -1, -1, -1);
-        aprsSendTelemetry(mdnOut(rmA0), mdnOut(rmA1), -rssi, (mdnOut(rmVcc) - 4500) / 4, readMCUTemp() / 100 + 100, aprsTlmBits);
-        //aprsSendStatus("Fine weather");
-        //aprsSendTelemetrySetup();
-        APRS_Client.stop();
+      else {
+        // Get RSSI
+        int rssi = GPRS_Modem.getRSSI();
+        // Connect to APRS server
+        if (APRS_Client.connect(aprsServer, aprsPort)) {
+          aprsAuthenticate();
+          //aprsSendPosition(" WxUnoProbe");
+          if (atmo_ok) aprsSendWeather(mdnOut(rmTemp), -1, mdnOut(rmPres), lux);
+          //aprsSendWeather(rmTemp.out(), -1, -1, -1);
+          aprsSendTelemetry(mdnOut(rmA0), mdnOut(rmA1), -rssi, (mdnOut(rmVcc) - 4500) / 4, readMCUTemp() / 100 + 100, aprsTlmBits);
+          //aprsSendStatus("Fine weather");
+          //aprsSendTelemetrySetup();
+          APRS_Client.stop();
+        }
+        else Serial.println(F("Connection failed"));
+        // Send the modem to sleep
       }
-      else Serial.println(F("Connection failed"));
-      // Send the modem to sleep
     }
 
     // Repeat sensor reading
