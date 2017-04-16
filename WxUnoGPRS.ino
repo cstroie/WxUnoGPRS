@@ -409,11 +409,23 @@ void softReset() {
   asm volatile ("  jmp 0");
 }
 
+// print a character string from program memory
+void print_P(const char *str) {
+  uint8_t val;
+  while (true) {
+    val = pgm_read_byte(str);
+    if (!val) break;
+    Serial.write(val);
+    str++;
+  }
+}
+
 void setup() {
   // Init the serial com
   Serial.println();
   Serial.begin(9600);
-  Serial.println(NODENAME);  // FIXME PSTR
+  print_P(NODENAME);
+  Serial.print(F(" "));
   Serial.println(__DATE__);
 
   // Set GSM module baud rate
@@ -500,7 +512,10 @@ void loop() {
       // Wake up the modem
       // Try to establish the PPP link, restart if failed
       if (!GPRS_Modem.pppConnect(apn)) {
-        Serial.println(F("PPP link failed"));
+        Serial.println(F("PPP link failed, reinit modem"));
+        GPRS_Modem.begin(&SerialAT, SIM_PRESENT);
+        // Repeat sensor reading next loop
+        snsNextTime -= snsDelay;
       }
       else {
         // Get RSSI
