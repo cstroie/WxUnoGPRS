@@ -206,7 +206,7 @@ void aprsSendWeather(int temp, int hmdt, int pres, int lux) {
   // Illuminance, if valid
   if (lux >= 0) {
     char buf[5];
-    sprintf_P(buf, PSTR("L%02d"), (int)(lux * 0.0079));
+    sprintf_P(buf, PSTR("L%03d"), (int)(lux * 0.0079));
     strcat(aprsPkt, buf);
   }
   // Comment (device name)
@@ -373,7 +373,7 @@ int readVcc() {
   // Reading register "ADCW" takes care of how to read ADCL and ADCH.
   long wADC = ADCW;
   // Return Vcc in mV; 1125300 = 1.1 * 1023 * 1000
-  // Calibration: 1.074
+  // 1.1V calibration: 1.074
   return (int)(1098702UL / wADC);
 }
 
@@ -387,7 +387,7 @@ time_t getUNIXTime() {
   int i = 3;
   if (GPRS_Modem.pppConnect(apn)) {
     if (APRS_Client.connect("utcnist.colorado.edu", 37)) {
-      unsigned int timeout = millis() + 10000UL;   // 10 seconds timeout
+      unsigned int timeout = millis() + 5000UL;   // 5 seconds timeout
       while (millis() <= timeout and i >= 0) {
         char b = APRS_Client.read();
         if (b != -1) uxtm.b[i--] = uint8_t(b);
@@ -517,14 +517,10 @@ void loop() {
     // APRS (after the first 3600/(aprsMsrmMax*aprsRprtHour) seconds,
     //       then every 60/aprsRprtHour minutes)
     if (aprsMsrmCount == 1) {
-      // Wake up the modem
       // Try to establish the PPP link, restart if failed
       if (!GPRS_Modem.pppConnect(apn)) {
-        Serial.println(F("PPP link failed, reinit modem"));
-        SerialAT.begin(9600);
-        GPRS_Modem.begin(&SerialAT, SIM_PRESENT);
-        // Repeat sensor reading next loop
-        snsNextTime -= snsDelay;
+        Serial.println(F("PPP link failed, restarting..."));
+        softReset();
       }
       else {
         // Get RSSI
