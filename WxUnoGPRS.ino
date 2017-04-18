@@ -28,6 +28,9 @@
 //#define DEBUG
 #define DEVEL
 
+// Watchdog
+#include <avr/wdt.h>
+
 // The sensors are connected to I2C
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
@@ -42,7 +45,7 @@
 
 // Device name
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "1.4";
+const char VERSION[]  PROGMEM = "1.5";
 bool  PROBE = true;    // True if the station is being probed
 
 // GPRS credentials
@@ -406,7 +409,12 @@ time_t getUNIXTime() {
 }
 
 void softReset() {
-  asm volatile ("  jmp 0");
+  // start watchdog with the provided prescaller
+  wdt_enable(WDTO_15MS);
+  // wait for the prescaller time to expire
+  // without sending the reset signal by using
+  // the wdt_reset() method
+  while (true) {}
 }
 
 // print a character string from program memory
@@ -513,6 +521,7 @@ void loop() {
       // Try to establish the PPP link, restart if failed
       if (!GPRS_Modem.pppConnect(apn)) {
         Serial.println(F("PPP link failed, reinit modem"));
+        SerialAT.begin(9600);
         GPRS_Modem.begin(&SerialAT, SIM_PRESENT);
         // Repeat sensor reading next loop
         snsNextTime -= snsDelay;
