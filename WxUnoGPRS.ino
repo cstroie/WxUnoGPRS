@@ -19,9 +19,9 @@
   WxUnoGPRS.  If not, see <http://www.gnu.org/licenses/>.
 
 
-  WiFi connected weather station, reading the athmospheric sensor BME280 and
-  the illuminance sensor TSL2561 and publishing the measured data along with
-  various local telemetry.
+  GPRS connected weather station, reading the temperature and athmospheric
+  pressure sensor BMP280, as well as internal temperature, supply voltage,
+  local illuminance, publishing the measured data to CWOP APRS.
 */
 
 // The DEBUG and DEVEL flag
@@ -45,13 +45,13 @@
 
 // Device name
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "1.5";
+const char VERSION[]  PROGMEM = "1.6";
 bool  PROBE = true;    // True if the station is being probed
 
 // GPRS credentials
-char apn[]  = "internet.simfony.net";
-char user[] = "";
-char pass[] = "";
+const char *apn  = "internet.simfony.net";
+const char *user = "";
+const char *pass = "";
 
 // APRS parameters
 const char *aprsServer = "cwop5.aprs.net";
@@ -74,14 +74,18 @@ const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,low,err,N
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10011111, ";
 const char eol[]          PROGMEM = "\r\n";
 
+// Time server
+const char *timeServer = "utcnist.colorado.edu";
+const int   timePort = 37;
+
 // Reports and measurements
-const int   aprsRprtHour = 10;  // Number of APRS reports per hour
-const int   aprsMsrmMax = 3;    // Number of measurements per report (keep even)
+const int   aprsRprtHour  = 10; // Number of APRS reports per hour
+const int   aprsMsrmMax   = 3;  // Number of measurements per report (keep even)
 int         aprsMsrmCount = 0;  // Measurements counter
-int         aprsTlmSeq = 0;     // Telemetry sequence mumber
+int         aprsTlmSeq    = 0;  // Telemetry sequence mumber
 
 // Telemetry bits
-char        aprsTlmBits = B00000000;
+char        aprsTlmBits   = B00000000;
 
 // The APRS connection client
 SoftwareSerial SerialAT(2, 3); // RX, TX
@@ -91,22 +95,27 @@ IPAddress ip;
 // The APRS packet buffer
 char aprsPkt[120] = "";
 
-// Statistics (median filter for the last 3 values)
-int rmTemp[4];
-int rmPres[4];
-int rmVcc[4];
-int rmA0[4];
-int rmA1[4];
+// Statistics (round median filter for the last 3 values)
+int mTemp[4];
+int mPres[4];
+int mRSSI[4];
+int mRad[4];
+int mVcc[4];
+int mA0[4];
+int mA1[4];
 
 // Sensors
-const unsigned long snsDelay = 3600000UL / (aprsRprtHour * aprsMsrmMax);
-unsigned long snsNextTime = 0UL;  // The next time to read the sensors
-Adafruit_BMP280 atmo;             // The athmospheric sensor
-bool atmo_ok = false;             // The athmospheric sensor flag
+const unsigned long snsDelay    = 3600000UL / (aprsRprtHour * aprsMsrmMax);
+unsigned long       snsNextTime = 0UL;  // The next time to read the sensors
+Adafruit_BMP280 atmo;                   // The athmospheric sensor
+bool atmo_ok = false;                   // The athmospheric sensor flag
 
-/*
-  Simple median filter
+/**
+  Simple median filter: get the median
   2014-03-25: started by David Cary
+
+  @param *buf the round median buffer
+  @return the median
 */
 int mdnOut(int *buf) {
   if (buf[0] < 3) return buf[3];
@@ -119,6 +128,12 @@ int mdnOut(int *buf) {
   }
 }
 
+/**
+  Simple median filter: add value to buffer
+
+  @param *buf the round median buffer
+  @param x the value to add
+*/
 void mdnIn(int *buf, int x) {
   if (buf[0] < 3) buf[0]++;
   buf[1] = buf[2];
@@ -126,6 +141,11 @@ void mdnIn(int *buf, int x) {
   buf[3] = x;
 }
 
+/**
+  Send an APRS packet and, eventuall, print it to serial line
+
+  @param *pkt the packet to send
+*/
 void aprsSend(const char *pkt) {
   APRS_Client.write((uint8_t *)pkt, strlen(pkt));
 #ifdef DEBUG
@@ -135,12 +155,13 @@ void aprsSend(const char *pkt) {
 
 /**
   Return time in APRS format: DDHHMMz
+
+  @param *buf the buffer to return the time to
+  @param len the buffer length
 */
-char *aprsTime() {
+char aprsTime(char *buf, size_t len) {
   time_t moment = now();
-  char buf[8];
-  sprintf_P(buf, PSTR("%02d%02d%02dz"), day(moment), hour(moment), minute(moment));
-  return buf;
+  snprintf_P(buf, len, PSTR("%02d%02d%02dz"), day(moment), hour(moment), minute(moment));
 }
 
 /**
@@ -170,18 +191,19 @@ void aprsAuthenticate() {
   @param lux illuminance
 */
 void aprsSendWeather(int temp, int hmdt, int pres, int lux) {
+  char buf[8];
   strcpy_P(aprsPkt, aprsCallSign);
   strcat_P(aprsPkt, aprsPath);
   strcat_P(aprsPkt, PSTR("@"));
-  strcat(aprsPkt, aprsTime());
+  aprsTime(buf, sizeof(buf));
+  strncat(aprsPkt, buf, sizeof(buf));
   strcat_P(aprsPkt, aprsLocation);
   // Wind (unavailable)
   strcat_P(aprsPkt, PSTR(".../...g..."));
   // Temperature
   if (temp >= -460) { // 0K in F
-    char buf[5];
     sprintf_P(buf, PSTR("t%03d"), temp);
-    strcat(aprsPkt, buf);
+    strncat(aprsPkt, buf, sizeof(buf));
   }
   else {
     strcat_P(aprsPkt, PSTR("t..."));
@@ -192,22 +214,19 @@ void aprsSendWeather(int temp, int hmdt, int pres, int lux) {
       strcat_P(aprsPkt, PSTR("h00"));
     }
     else {
-      char buf[5];
       sprintf_P(buf, PSTR("h%02d"), hmdt);
-      strcat(aprsPkt, buf);
+      strncat(aprsPkt, buf, sizeof(buf));
     }
   }
   // Athmospheric pressure
   if (pres >= 0) {
-    char buf[7];
     sprintf_P(buf, PSTR("b%05d"), pres);
-    strcat(aprsPkt, buf);
+    strncat(aprsPkt, buf, sizeof(buf));
   }
   // Illuminance, if valid
-  if (lux >= 0) {
-    char buf[5];
-    sprintf_P(buf, PSTR("L%03d"), (int)(lux * 0.0079));
-    strcat(aprsPkt, buf);
+  if (lux >= 0 and lux <= 999) {
+    sprintf_P(buf, PSTR("L%03d"), lux);
+    strncat(aprsPkt, buf, sizeof(buf));
   }
   // Comment (device name)
   strcat_P(aprsPkt, NODENAME);
@@ -219,12 +238,12 @@ void aprsSendWeather(int temp, int hmdt, int pres, int lux) {
   Send APRS telemetry and, periodically, send the telemetry setup
   FW0690>APRS,TCPIP*:T#517,173,062,213,002,000,00000000
 
+  @param a0 read analog A0
+  @param a1 read analog A1
+  @param rssi GSM RSSI level
   @param vcc voltage
-  @param rssi wifi level
-  @param heap free memory
-  @param luxVis raw visible illuminance
-  @param luxIrd raw infrared illuminance
-  @bits digital inputs
+  @param temp internal temperature
+  @param bits digital inputs
 */
 void aprsSendTelemetry(int a0, int a1, int rssi, int vcc, int temp, byte bits) {
   // Increment the telemetry sequence number, reset it if exceeds 999
@@ -236,11 +255,10 @@ void aprsSendTelemetry(int a0, int a1, int rssi, int vcc, int temp, byte bits) {
   strcat_P(aprsPkt, aprsPath);
   strcat_P(aprsPkt, PSTR("T"));
   char buf[40];
-  sprintf_P(buf, PSTR("#%03d,%03d,%03d,%03d,%03d,%03d,"), aprsTlmSeq, a0, a1, rssi, vcc, temp);
-  strcat(aprsPkt, buf);
-  char bbuf[10];
-  itoa(bits, bbuf, 2);
-  strcat(aprsPkt, bbuf);
+  snprintf_P(buf, sizeof(buf), PSTR("#%03d,%03d,%03d,%03d,%03d,%03d,"), aprsTlmSeq, a0, a1, rssi, vcc, temp);
+  strncat(aprsPkt, buf, sizeof(buf));
+  itoa(bits, buf, 2);
+  strncat(aprsPkt, buf, sizeof(buf));
   strcat_P(aprsPkt, eol);
   aprsSend(aprsPkt);
 }
@@ -256,7 +274,7 @@ void aprsSendTelemetrySetup() {
   strcpy_P(aprsPkt, aprsCallSign);
   strcat_P(aprsPkt, aprsPath);
   strcat_P(aprsPkt, PSTR(":"));
-  strcat(aprsPkt, padCallSign);
+  strncat(aprsPkt, padCallSign, sizeof(padCallSign));
   strcat_P(aprsPkt, aprsTlmPARM);
   strcat_P(aprsPkt, eol);
   aprsSend(aprsPkt);
@@ -264,7 +282,7 @@ void aprsSendTelemetrySetup() {
   strcpy_P(aprsPkt, aprsCallSign);
   strcat_P(aprsPkt, aprsPath);
   strcat_P(aprsPkt, PSTR(":"));
-  strcat(aprsPkt, padCallSign);
+  strncat(aprsPkt, padCallSign, sizeof(padCallSign));
   strcat_P(aprsPkt, aprsTlmEQNS);
   strcat_P(aprsPkt, eol);
   aprsSend(aprsPkt);
@@ -272,7 +290,7 @@ void aprsSendTelemetrySetup() {
   strcpy_P(aprsPkt, aprsCallSign);
   strcat_P(aprsPkt, aprsPath);
   strcat_P(aprsPkt, PSTR(":"));
-  strcat(aprsPkt, padCallSign);
+  strncat(aprsPkt, padCallSign, sizeof(padCallSign));
   strcat_P(aprsPkt, aprsTlmUNIT);
   strcat_P(aprsPkt, eol);
   aprsSend(aprsPkt);
@@ -280,7 +298,7 @@ void aprsSendTelemetrySetup() {
   strcpy_P(aprsPkt, aprsCallSign);
   strcat_P(aprsPkt, aprsPath);
   strcat_P(aprsPkt, PSTR(":"));
-  strcat(aprsPkt, padCallSign);
+  strncat(aprsPkt, padCallSign, sizeof(padCallSign));
   strcat_P(aprsPkt, aprsTlmBITS);
   strcat_P(aprsPkt, NODENAME);
   strcat_P(aprsPkt, PSTR("/"));
@@ -291,7 +309,7 @@ void aprsSendTelemetrySetup() {
 
 /**
   Send APRS status
-  FW0690>APRS,TCPIP*:>13:06 Fine weather
+  FW0690>APRS,TCPIP*:>Fine weather
 
   @param message the status message to send
 */
@@ -323,18 +341,20 @@ void aprsSendPosition(const char *comment) {
   strcat_P(aprsPkt, PSTR("/000/000/A="));
   char buf[7];
   sprintf_P(buf, PSTR("%06d"), altFeet);
-  strcat(aprsPkt, buf);
+  strncat(aprsPkt, buf, sizeof(buf));
   strcat(aprsPkt, comment);
   strcat_P(aprsPkt, eol);
   aprsSend(aprsPkt);
 }
 
-int readMCUTemp() {
-  // The internal temperature has to be used
-  // with the internal reference of 1.1V.
-  // Channel 8 can not be selected with
-  // the analogRead function yet.
+/**
+  Read the internal MCU temperature
+  The internal temperature has to be used with the internal reference of 1.1V.
+  Channel 8 can not be selected with the analogRead function yet.
 
+  @return temperature in hundreds of degrees Celsius, *calibrated for my device*
+*/
+int readMCUTemp() {
   // Set the internal reference and mux.
   ADMUX = (_BV(REFS1) | _BV(REFS0) | _BV(MUX3));
   ADCSRA |= _BV(ADEN);  // enable the ADC
@@ -352,6 +372,8 @@ int readMCUTemp() {
 
 /*
   Read the power supply voltage, by measuring the internal 1V1 reference
+
+  @return voltage in millivolts, *calibrated for my device*
 */
 int readVcc() {
   // Read 1.1V reference against AVcc
@@ -377,6 +399,11 @@ int readVcc() {
   return (int)(1098702UL / wADC);
 }
 
+/*
+  Connect to a time server using the RFC 868 time protocol
+
+  @return UNIX time
+*/
 time_t getUNIXTime() {
   union {
     uint32_t t = 0UL;
@@ -386,7 +413,7 @@ time_t getUNIXTime() {
   // Try to establish the PPP link
   int i = 3;
   if (GPRS_Modem.pppConnect(apn)) {
-    if (APRS_Client.connect("utcnist.colorado.edu", 37)) {
+    if (APRS_Client.connect(timeServer, timePort)) {
       unsigned int timeout = millis() + 5000UL;   // 5 seconds timeout
       while (millis() <= timeout and i >= 0) {
         char b = APRS_Client.read();
@@ -398,7 +425,7 @@ time_t getUNIXTime() {
 
   if (i < 0) {
     uint32_t tm = uxtm.t - 2208988800UL;
-    Serial.print(F("Time sync: "));
+    Serial.print(F("UNIX Time: "));
     Serial.println(tm);
     return tm;
   }
@@ -408,26 +435,36 @@ time_t getUNIXTime() {
   }
 }
 
-void softReset() {
-  // start watchdog with the provided prescaller
-  wdt_enable(WDTO_15MS);
-  // wait for the prescaller time to expire
+/*
+  Software reset
+  (c) Mircea Diaconescu http://web-engineering.info/node/29
+*/
+void softReset(uint8_t prescaller) {
+  // Start watchdog with the provided prescaller
+  wdt_enable(prescaller);
+  // Wait for the prescaller time to expire
   // without sending the reset signal by using
   // the wdt_reset() method
   while (true) {}
 }
 
-// print a character string from program memory
+/**
+  Print a character array from program memory
+*/
 void print_P(const char *str) {
   uint8_t val;
-  while (true) {
+  do {
     val = pgm_read_byte(str);
-    if (!val) break;
-    Serial.write(val);
-    str++;
-  }
+    if (val) {
+      Serial.write(val);
+      str++;
+    }
+  } while (val);
 }
 
+/**
+  Main Arduino setup function
+*/
 void setup() {
   // Init the serial com
   Serial.println();
@@ -443,7 +480,6 @@ void setup() {
 
   // Start time sync
   setSyncProvider(getUNIXTime);
-  setSyncInterval(60 * 60);
 
   // BMP280
   if (atmo.begin(0x76)) {
@@ -463,11 +499,17 @@ void setup() {
   snsNextTime = millis();
 }
 
+/**
+  Main Arduino loop
+*/
 void loop() {
-  // Read the sensors and publish telemetry
+  // Read the sensors
   if (millis() >= snsNextTime) {
-    // Keep the time
-    now();
+    // Keep the time (timeStatus calls now()) and use longer sync intervals
+    // if the time has been set
+    if (timeStatus() == timeSet) setSyncInterval(8 * 60 * 60);
+    else setSyncInterval(300);
+
     // Count to check if we need to send the APRS data
     if (++aprsMsrmCount > aprsMsrmMax) aprsMsrmCount = 1;
     // Set the telemetry bit 7 if the station is being probed
@@ -485,59 +527,78 @@ void loop() {
       temp = atmo.readTemperature();
       pres = atmo.readPressure();
       // Median Filter
-      mdnIn(rmTemp, (int)(temp * 9 / 5 + 32));      // Store directly integer Fahrenheit
-      mdnIn(rmPres, (int)(pres * altCorr / 10.0));  // Store directly sea level in dPa
+      mdnIn(mTemp, (int)(temp * 9 / 5 + 32));      // Store directly integer Fahrenheit
+      mdnIn(mPres, (int)(pres * altCorr / 10.0));  // Store directly sea level in dPa
     }
 
-    // Read Vcc first (mV)
+    // Read Vcc (mV) and add to the round median filter
     int vcc = readVcc();
-    if (vcc < 5000) {
-      // Set the bit 3 to show the battery is low
+    mdnIn(mVcc, vcc);
+    if (vcc < 4750 or vcc > 5250) {
+      // Set the bit 3 to show the USB voltage is wrong (5V +/- 5%)
       aprsTlmBits |= B00001000;
     }
 
-    // Various telemetry
+    // Get RSSI (will get FALSE if the modem is not working)
+    int rssi = GPRS_Modem.getRSSI();
+    if (rssi) mdnIn(mRSSI, -rssi);
+
+    // Various analog telemetry
     int a0 = analogRead(A0);
     int a1 = analogRead(A1);
 
-    // Median Filter
-    mdnIn(rmA0, (5000 * (1023UL - (unsigned long)a0)) / 20480);
-    mdnIn(rmA1, (5000 * (unsigned long)a1) / 20480);
-    mdnIn(rmVcc, vcc);
+    // Add to round median filter, mV ( a / 1024 * 5000)
+    mdnIn(mA0, (5000 * (unsigned long)a0) / 1024);
+    mdnIn(mA1, (5000 * (unsigned long)a1) / 1024);
 
     // Upper part
     // 500 / R(kO); R = R0(1023/x-1)
     // Lower part
     // Vout=RawADC0*0.0048828125;
     // lux=(2500/Vout-500)/10;
-
     //int lux = 51150L / a0 - 50;
-    long lux = 50L * (1024L - a0) / a0;  // illuminance value in lux
+
+    // Illuminance value in lux
+    long lux = 50L * (1024L - a0) / a0;
+    // Calculate the solar radiation in mW/m^2
+    // FIXME this is in mW/m^2
+    int solRad = (int)(lux * 7.9);
+    // Set the bit 5 to show the sensor is present (reverse) and there is any light
+    if (solRad > 0) aprsTlmBits |= B00100000;
+    // Set the bit 4 to show the sensor is saturated
+    if (solRad > 999) aprsTlmBits |= B00010000;
+    // Add to round median filter
+    mdnIn(mRad, solRad);
 
     // APRS (after the first 3600/(aprsMsrmMax*aprsRprtHour) seconds,
     //       then every 60/aprsRprtHour minutes)
     if (aprsMsrmCount == 1) {
+      // TODO Wake up the modem if sleeping
       // Try to establish the PPP link, restart if failed
+      // TODO store to flash last measurements and time
       if (!GPRS_Modem.pppConnect(apn)) {
         Serial.println(F("PPP link failed, restarting..."));
-        softReset();
+        softReset(WDTO_4S);
       }
       else {
-        // Get RSSI
-        int rssi = GPRS_Modem.getRSSI();
         // Connect to APRS server
         if (APRS_Client.connect(aprsServer, aprsPort)) {
           aprsAuthenticate();
           //aprsSendPosition(" WxUnoProbe");
-          if (atmo_ok) aprsSendWeather(mdnOut(rmTemp), -1, mdnOut(rmPres), lux);
-          //aprsSendWeather(rmTemp.out(), -1, -1, -1);
-          aprsSendTelemetry(mdnOut(rmA0), mdnOut(rmA1), -rssi, (mdnOut(rmVcc) - 4500) / 4, readMCUTemp() / 100 + 100, aprsTlmBits);
+          if (atmo_ok) aprsSendWeather(mdnOut(mTemp), -1, mdnOut(mPres), mdnOut(mRad));
+          //aprsSendWeather(mTemp.out(), -1, -1, -1);
+          aprsSendTelemetry(mdnOut(mA0) / 20,
+                            mdnOut(mA1) / 20,
+                            mdnOut(mRSSI),
+                            (mdnOut(mVcc) - 4500) / 4,
+                            readMCUTemp() / 100 + 100,
+                            aprsTlmBits);
           //aprsSendStatus("Fine weather");
           //aprsSendTelemetrySetup();
           APRS_Client.stop();
         }
         else Serial.println(F("Connection failed"));
-        // Send the modem to sleep
+        // TODO Send the modem to sleep
       }
     }
 
