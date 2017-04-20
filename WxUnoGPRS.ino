@@ -40,9 +40,6 @@
 #include <M590Client.h>
 #include <SoftwareSerial.h>
 
-// NTP
-#include <TimeLib.h>
-
 // Device name
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
 const char VERSION[]  PROGMEM = "1.6";
@@ -74,9 +71,12 @@ const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,low,err,N
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10011111, ";
 const char eol[]          PROGMEM = "\r\n";
 
-// Time server
-const char *timeServer = "utcnist.colorado.edu";
-const int   timePort = 37;
+// Time
+const char   *timeServer = "utcnist.colorado.edu";
+const int     timePort = 37;
+unsigned long timeNextSync = 0UL;
+unsigned long timeDelta = 0UL;
+bool          timeOk = false;
 
 // Reports and measurements
 const int   aprsRprtHour  = 10; // Number of APRS reports per hour
@@ -160,8 +160,11 @@ void aprsSend(const char *pkt) {
   @param len the buffer length
 */
 char aprsTime(char *buf, size_t len) {
-  time_t moment = now();
-  snprintf_P(buf, len, PSTR("%02d%02d%02dh"), hour(moment), minute(moment), second(moment));
+  unsigned long utm = timeUNIX();
+  int hh = (utm % 86400L) / 3600;
+  int mm = (utm % 3600) / 60;
+  int ss =  utm % 60;
+  snprintf_P(buf, len, PSTR("%02d%02d%02dh"), hh, mm, ss);
 }
 
 /**
@@ -399,12 +402,41 @@ int readVcc() {
   return (int)(1098702UL / wADC);
 }
 
+/**
+  Get current time as UNIX time
+
+  @return current UNIX time
+*/
+unsigned long timeUNIX() {
+  // Check if we need to sync
+  if (millis() >= timeNextSync) {
+    // Try to get the time from Internet
+    unsigned long tm = timeSync();
+    if (tm == 0) {
+      // Time sync has failed, sync again in 5 minutes
+      timeNextSync += 5 * 60 * 1000;
+      timeOk = false;
+    }
+    else {
+      // Time sync has succeeded, sync again in 8 hours
+      timeNextSync += 8 * 60 * 60 * 1000;
+      timeOk = true;
+      // Compute the time delta
+      timeDelta = tm - (millis() / 1000);
+    }
+  }
+
+  // Get current time based on uptime and time delta,
+  // or uptime for no time sync ever
+  return (millis() / 1000) + timeDelta;
+}
+
 /*
   Connect to a time server using the RFC 868 time protocol
 
-  @return UNIX time
+  @return UNIX time from server
 */
-time_t getUNIXTime() {
+unsigned long timeSync() {
   union {
     uint32_t t = 0UL;
     uint8_t  b[4];
@@ -424,6 +456,7 @@ time_t getUNIXTime() {
   }
 
   if (i < 0) {
+    // Convert 1900 epoch to 1970 Unix time
     uint32_t tm = uxtm.t - 2208988800UL;
     Serial.print(F("UNIX Time: "));
     Serial.println(tm);
@@ -478,7 +511,7 @@ void setup() {
   // Initialize the modem, restart if failed
   if (GPRS_Modem.begin(&SerialAT, SIM_PRESENT)) {
     // Start time sync
-    setSyncProvider(getUNIXTime);
+    timeUNIX();
   }
   else {
     // Wait a minute
@@ -497,7 +530,7 @@ void setup() {
   }
 
   // Initialize the random number generator and set the APRS telemetry start sequence
-  randomSeed(readMCUTemp() + now() + GPRS_Modem.getRSSI() + readVcc() + millis());
+  randomSeed(readMCUTemp() + timeUNIX() + GPRS_Modem.getRSSI() + readVcc() + millis());
   aprsTlmSeq = random(1000);
 
   // Start the sensor timer
@@ -510,18 +543,14 @@ void setup() {
 void loop() {
   // Read the sensors
   if (millis() >= snsNextTime) {
-    // Keep the time (timeStatus calls now()) and use longer sync intervals
-    // if the time has been set
-    if (timeStatus() == timeSet) setSyncInterval(8 * 60 * 60);
-    else setSyncInterval(300);
-
     // Count to check if we need to send the APRS data
     if (++aprsMsrmCount > aprsMsrmMax) aprsMsrmCount = 1;
     // Set the telemetry bit 7 if the station is being probed
     if (PROBE) aprsTlmBits = B10000000;
 
-    // Set the telemetry bit 2 if time is not accurate
-    if (timeStatus() != timeSet) aprsTlmBits |= B00000100;
+    // Check the time and set the telemetry bit 2 if time is not accurate
+    timeUNIX();
+    if (!timeOk) aprsTlmBits |= B00000100;
 
     // Read BMP280
     float temp, pres;
