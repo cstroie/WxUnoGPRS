@@ -31,6 +31,10 @@
 // Watchdog
 #include <avr/wdt.h>
 
+// EEPROM and CRC32
+#include <EEPROM.h>
+#include <CRC32.h>
+
 // The sensors are connected to I2C
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
@@ -42,7 +46,7 @@
 
 // Device name
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "1.6";
+const char VERSION[]  PROGMEM = "1.7";
 bool  PROBE = true;    // True if the station is being probed
 
 // GPRS credentials
@@ -77,6 +81,8 @@ const int     timePort = 37;
 unsigned long timeNextSync = 0UL;
 unsigned long timeDelta = 0UL;
 bool          timeOk = false;
+// EEPROM address for storing last known time
+int           eeTime = 0;
 
 // Reports and measurements
 const int   aprsRprtHour  = 10; // Number of APRS reports per hour
@@ -90,7 +96,7 @@ char        aprsTlmBits   = B00000000;
 // The APRS connection client
 SoftwareSerial SerialAT(2, 3); // RX, TX
 M590Drv GPRS_Modem;
-M590Client APRS_Client(&GPRS_Modem);
+M590Client GPRS_Client(&GPRS_Modem);
 IPAddress ip;
 // The APRS packet buffer
 char aprsPkt[120] = "";
@@ -142,12 +148,114 @@ void mdnIn(int *buf, int x) {
 }
 
 /**
+  Write the time to EEPROM, along with CRC32: 8 bytes
+*/
+void timeEEWrite(unsigned long tm) {
+  // Create a CRC32 checksum calculator.
+  CRC32 crc;
+  crc.update(&tm, sizeof(tm));
+  unsigned long ck = crc.finalize();
+  // Write the data
+  EEPROM.put(eeTime, tm);
+  EEPROM.put(eeTime + sizeof(tm), ck);
+}
+
+/**
+  Read the time from EEPROM, along with CRC32 and verify
+*/
+unsigned long timeEERead() {
+  unsigned long tm, tc;
+  EEPROM.get(eeTime, tm);
+  EEPROM.get(eeTime + sizeof(tm), tc);
+  // Create a CRC32 checksum calculator.
+  CRC32 crc;
+  crc.update(&tm, sizeof(tm));
+  unsigned long ck = crc.finalize();
+  // Verify
+  if (tc == ck) return tm;
+  else          return 0UL;
+}
+
+/**
+  Get current time as UNIX time
+
+  @return current UNIX time
+*/
+unsigned long timeUNIX(bool sync = true) {
+  // Check if we need to sync
+  if (millis() >= timeNextSync and sync) {
+    // Try to get the time from Internet
+    unsigned long tm = timeSync();
+    if (tm == 0) {
+      // Time sync has failed, sync again over one minute
+      timeNextSync += 1UL * 60 * 1000;
+      timeOk = false;
+      // Try to get old time from eeprom, if time delta is zero
+      if (timeDelta == 0) {
+        // Compute an approximate time delta, if time is valid
+        tm = timeEERead();
+        if (tm != 0) {
+          timeDelta = tm - (millis() / 1000);
+          Serial.print(F("Time sync error, using EEPROM: 0x"));
+          Serial.println(tm, 16);
+        }
+        else Serial.println(F("Time sync error, invalid EEPROM"));
+      }
+    }
+    else {
+      // Compute the new time delta
+      timeDelta = tm - (millis() / 1000);
+      // Time sync has succeeded, sync again in 8 hours
+      timeNextSync += 8UL * 60 * 60 * 1000;
+      timeOk = true;
+      // Store this known time
+      timeEEWrite(tm);
+      Serial.print(F("Network UNIX Time: 0x"));
+      Serial.println(tm, 16);
+    }
+  }
+
+  // Get current time based on uptime and time delta,
+  // or just uptime for no time sync ever
+  return (millis() / 1000) + timeDelta;
+}
+
+/*
+  Connect to a time server using the RFC 868 time protocol
+
+  @return UNIX time from server
+*/
+unsigned long timeSync() {
+  union {
+    uint32_t t = 0UL;
+    uint8_t  b[4];
+  } uxtm;
+
+  // Try to establish the PPP link
+  int i = 3;
+  if (GPRS_Modem.pppConnect(apn)) {
+    if (GPRS_Client.connect(timeServer, timePort)) {
+      unsigned int timeout = millis() + 5000UL;   // 5 seconds timeout
+      while (millis() <= timeout and i >= 0) {
+        char b = GPRS_Client.read();
+        if (b != -1) uxtm.b[i--] = uint8_t(b);
+      }
+      GPRS_Client.stop();
+    }
+  }
+
+  // Convert 1900 epoch to 1970 Unix time, if valid
+  if (i < 0) return uxtm.t - 2208988800UL;
+  else       return 0UL;
+}
+
+/**
   Send an APRS packet and, eventuall, print it to serial line
 
   @param *pkt the packet to send
 */
 void aprsSend(const char *pkt) {
-  APRS_Client.write((uint8_t *)pkt, strlen(pkt));
+  GPRS_Client.write((uint8_t *)pkt, strlen(pkt));
 #ifdef DEBUG
   Serial.print(pkt);
 #endif
@@ -160,10 +268,13 @@ void aprsSend(const char *pkt) {
   @param len the buffer length
 */
 char aprsTime(char *buf, size_t len) {
-  unsigned long utm = timeUNIX();
+  // Get the time, but do not open a connection
+  unsigned long utm = timeUNIX(false);
+  // Compute hour, minute and second
   int hh = (utm % 86400L) / 3600;
   int mm = (utm % 3600) / 60;
   int ss =  utm % 60;
+  // Return the formatted time
   snprintf_P(buf, len, PSTR("%02d%02d%02dh"), hh, mm, ss);
 }
 
@@ -402,72 +513,6 @@ int readVcc() {
   return (int)(1098702UL / wADC);
 }
 
-/**
-  Get current time as UNIX time
-
-  @return current UNIX time
-*/
-unsigned long timeUNIX() {
-  // Check if we need to sync
-  if (millis() >= timeNextSync) {
-    // Try to get the time from Internet
-    unsigned long tm = timeSync();
-    if (tm == 0) {
-      // Time sync has failed, sync again in 5 minutes
-      timeNextSync += 5 * 60 * 1000;
-      timeOk = false;
-    }
-    else {
-      // Time sync has succeeded, sync again in 8 hours
-      timeNextSync += 8 * 60 * 60 * 1000;
-      timeOk = true;
-      // Compute the time delta
-      timeDelta = tm - (millis() / 1000);
-    }
-  }
-
-  // Get current time based on uptime and time delta,
-  // or uptime for no time sync ever
-  return (millis() / 1000) + timeDelta;
-}
-
-/*
-  Connect to a time server using the RFC 868 time protocol
-
-  @return UNIX time from server
-*/
-unsigned long timeSync() {
-  union {
-    uint32_t t = 0UL;
-    uint8_t  b[4];
-  } uxtm;
-
-  // Try to establish the PPP link
-  int i = 3;
-  if (GPRS_Modem.pppConnect(apn)) {
-    if (APRS_Client.connect(timeServer, timePort)) {
-      unsigned int timeout = millis() + 5000UL;   // 5 seconds timeout
-      while (millis() <= timeout and i >= 0) {
-        char b = APRS_Client.read();
-        if (b != -1) uxtm.b[i--] = uint8_t(b);
-      }
-      APRS_Client.stop();
-    }
-  }
-
-  if (i < 0) {
-    // Convert 1900 epoch to 1970 Unix time
-    uint32_t tm = uxtm.t - 2208988800UL;
-    Serial.print(F("UNIX Time: "));
-    Serial.println(tm);
-    return tm;
-  }
-  else {
-    Serial.println(F("Time sync error"));
-    return 0;
-  }
-}
-
 /*
   Software reset
   (c) Mircea Diaconescu http://web-engineering.info/node/29
@@ -504,6 +549,8 @@ void setup() {
   Serial.begin(9600);
   print_P(NODENAME);
   Serial.print(F(" "));
+  print_P(VERSION);
+  Serial.print(F(" "));
   Serial.println(__DATE__);
 
   // Set GSM module baud rate
@@ -530,7 +577,7 @@ void setup() {
   }
 
   // Initialize the random number generator and set the APRS telemetry start sequence
-  randomSeed(readMCUTemp() + timeUNIX() + GPRS_Modem.getRSSI() + readVcc() + millis());
+  randomSeed(readMCUTemp() + timeUNIX(false) + GPRS_Modem.getRSSI() + readVcc() + millis());
   aprsTlmSeq = random(1000);
 
   // Start the sensor timer
@@ -549,7 +596,7 @@ void loop() {
     if (PROBE) aprsTlmBits = B10000000;
 
     // Check the time and set the telemetry bit 2 if time is not accurate
-    timeUNIX();
+    unsigned long tm = timeUNIX();
     if (!timeOk) aprsTlmBits |= B00000100;
 
     // Read BMP280
@@ -612,15 +659,17 @@ void loop() {
       // TODO store to flash last measurements and time
       if (!GPRS_Modem.pppConnect(apn)) {
         Serial.println(F("PPP link failed, restarting..."));
+        // If time is good, store it
+        if (timeOk) timeEEWrite(tm);
+        // Reset
         softReset(WDTO_4S);
       }
       else {
         // Connect to APRS server
-        if (APRS_Client.connect(aprsServer, aprsPort)) {
+        if (GPRS_Client.connect(aprsServer, aprsPort)) {
           aprsAuthenticate();
           //aprsSendPosition(" WxUnoProbe");
           if (atmo_ok) aprsSendWeather(mdnOut(mTemp), -1, mdnOut(mPres), mdnOut(mRad));
-          //aprsSendWeather(mTemp.out(), -1, -1, -1);
           aprsSendTelemetry(mdnOut(mA0) / 20,
                             mdnOut(mA1) / 20,
                             mdnOut(mRSSI),
@@ -628,8 +677,7 @@ void loop() {
                             readMCUTemp() / 100 + 100,
                             aprsTlmBits);
           //aprsSendStatus("Fine weather");
-          //aprsSendTelemetrySetup();
-          APRS_Client.stop();
+          GPRS_Client.stop();
         }
         else Serial.println(F("Connection failed"));
         // TODO Send the modem to sleep
