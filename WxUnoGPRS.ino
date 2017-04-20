@@ -161,7 +161,7 @@ void aprsSend(const char *pkt) {
 */
 char aprsTime(char *buf, size_t len) {
   time_t moment = now();
-  snprintf_P(buf, len, PSTR("%02d%02d%02dz"), day(moment), hour(moment), minute(moment));
+  snprintf_P(buf, len, PSTR("%02d%02d%02dh"), hour(moment), minute(moment), second(moment));
 }
 
 /**
