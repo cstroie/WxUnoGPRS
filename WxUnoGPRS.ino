@@ -475,11 +475,16 @@ void setup() {
 
   // Set GSM module baud rate
   SerialAT.begin(9600);
-  // FIXME Do not continue without modem
-  GPRS_Modem.begin(&SerialAT, SIM_PRESENT);
-
-  // Start time sync
-  setSyncProvider(getUNIXTime);
+  // Initialize the modem, restart if failed
+  if (GPRS_Modem.begin(&SerialAT, SIM_PRESENT)) {
+    // Start time sync
+    setSyncProvider(getUNIXTime);
+  }
+  else {
+    // Wait a minute
+    delay(60000);
+    softReset(WDTO_4S);
+  }
 
   // BMP280
   if (atmo.begin(0x76)) {
