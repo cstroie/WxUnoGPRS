@@ -102,6 +102,9 @@ IPAddress ip;
 // The APRS packet buffer
 char aprsPkt[120] = "";
 
+// When ADC completed, take an interrupt
+EMPTY_INTERRUPT(ADC_vect);
+
 // Statistics (round median filter for the last 3 values)
 int mTemp[4];
 int mPres[4];
