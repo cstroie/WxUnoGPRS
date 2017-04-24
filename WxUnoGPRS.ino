@@ -464,6 +464,50 @@ void aprsSendPosition(const char *comment) {
 }
 
 /**
+  Read the analog pin after a delay, while sleeping, using interrupt
+
+  @param pin the analog pin
+  @return temperature in hundreds of degrees Celsius, *calibrated for my device*
+*/
+int readAnalog(uint8_t pin) {
+  // Allow for channel or pin numbers
+  if (pin >= 14) pin -= 14;
+  
+  // Set the analog reference (high two bits of ADMUX) and select the
+  // channel (low 4 bits).  This also sets ADLAR (left-adjust result)
+  // to 0 (the default).
+  ADMUX = (analog_reference << 6) | (pin & 0x07);
+  
+  // Prescaler of 128
+  ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);
+  // Enable the ADC
+  ADCSRA |= _BV(ADEN);
+
+  // Wait for voltage to settle
+  delay(10);
+  // Take an ADC reading in sleep mode
+  noInterrupts();
+  set_sleep_mode (SLEEP_MODE_ADC);
+  sleep_enable();
+  
+  // Start conversion
+  ADCSRA |= _BV(ADSC);
+  interrupts();
+  sleep_cpu();     
+  sleep_disable();
+
+  // Awake again, reading should be done, but better make sure
+  // maybe the timer interrupt fired 
+  while (bit_is_set(ADCSRA, ADSC));
+
+  // Reading register "ADCW" takes care of how to read ADCL and ADCH.
+  long wADC = ADCW;
+
+  // The returned reading
+  return (int)(wADC);
+}
+
+/**
   Read the internal MCU temperature
   The internal temperature has to be used with the internal reference of 1.1V.
   Channel 8 can not be selected with the analogRead function yet.
@@ -648,8 +692,8 @@ void loop() {
     if (rssi) mdnIn(mRSSI, -rssi);
 
     // Various analog telemetry
-    int a0 = analogRead(A0);
-    int a1 = analogRead(A1);
+    int a0 = readAnalog(A0);
+    int a1 = readAnalog(A1);
 
     // Add to round median filter, mV ( a / 1024 * 5000)
     mdnIn(mA0, (5000 * (unsigned long)a0) / 1024);
