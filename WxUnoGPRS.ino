@@ -70,7 +70,7 @@ const char aprsCallSign[] PROGMEM = "FW0727";
 const char aprsPassCode[] PROGMEM = "-1";
 const char aprsPath[]     PROGMEM = ">APRS,TCPIP*:";
 const char aprsLocation[] PROGMEM = "4455.29N/02527.08E_";
-const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Thrm,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,BAT,TM,B7,B8";
+const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Soil,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,BAT,TM,B7,B8";
 const char aprsTlmEQNS[]  PROGMEM = ":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100";
 const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,low,err,N/A,N/A";
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10011111, ";
@@ -236,10 +236,15 @@ unsigned long timeSync() {
   } uxtm;
 
   // Try to establish the PPP link
-  int bytes = -1;
+  int bytes = 4;
   if (GPRS_Modem.pppConnect(apn)) {
     if (GPRS_Client.connect(timeServer, timePort)) {
-      bytes = GPRS_Client.read(uxtm.b, sizeof(uxtm.t));
+      // Read time during 5 seconds
+      unsigned int timeout = millis() + 5000UL;
+      while (millis() <= timeout and bytes > 0) {
+        char b = GPRS_Client.read();
+        if (b != -1) uxtm.b[bytes--] = uint8_t(b);
+      }
       GPRS_Client.stop();
     }
   }
@@ -467,36 +472,30 @@ void aprsSendPosition(const char *comment) {
   Read the analog pin after a delay, while sleeping, using interrupt
 
   @param pin the analog pin
-  @return temperature in hundreds of degrees Celsius, *calibrated for my device*
+  @return raw analog read value
 */
 int readAnalog(uint8_t pin) {
   // Allow for channel or pin numbers
   if (pin >= 14) pin -= 14;
-  
+
   // Set the analog reference to DEFAULT, select the channel (low 4 bits).
   // This also sets ADLAR (left-adjust result) to 0 (the default).
-  ADMUX = (_BV(REFS0)) | (pin & 0x07);
-  
-  // Prescaler of 128
-  ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);
-  // Enable the ADC
-  ADCSRA |= _BV(ADEN);
+  ADMUX = _BV(REFS0) | (pin & 0x07);
+  ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);  // prescaler of 128
+  ADCSRA |= _BV(ADEN);  // enable the ADC
+  ADCSRA |= _BV(ADIE);  // enable intterupt
 
   // Wait for voltage to settle
   delay(10);
   // Take an ADC reading in sleep mode
   noInterrupts();
-  set_sleep_mode (SLEEP_MODE_ADC);
-  sleep_enable();
-  
   // Start conversion
   ADCSRA |= _BV(ADSC);
+  set_sleep_mode(SLEEP_MODE_ADC);
   interrupts();
-  sleep_cpu();     
-  sleep_disable();
 
   // Awake again, reading should be done, but better make sure
-  // maybe the timer interrupt fired 
+  // maybe the timer interrupt fired
   while (bit_is_set(ADCSRA, ADSC));
 
   // Reading register "ADCW" takes care of how to read ADCL and ADCH.
@@ -518,22 +517,19 @@ int readMCUTemp() {
   ADMUX = (_BV(REFS1) | _BV(REFS0) | _BV(MUX3));
   ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);  // prescaler of 128
   ADCSRA |= _BV(ADEN);  // enable the ADC
+  ADCSRA |= _BV(ADIE);  // enable intterupt
 
-  // Wait for Vref to settle
+  // Wait for voltage to settle
   delay(10);
   // Take an ADC reading in sleep mode
   noInterrupts();
-  set_sleep_mode (SLEEP_MODE_ADC);
-  sleep_enable();
-  
   // Start conversion
   ADCSRA |= _BV(ADSC);
+  set_sleep_mode(SLEEP_MODE_ADC);
   interrupts();
-  sleep_cpu();     
-  sleep_disable();
 
   // Awake again, reading should be done, but better make sure
-  // maybe the timer interrupt fired 
+  // maybe the timer interrupt fired
   while (bit_is_set(ADCSRA, ADSC));
 
   // Reading register "ADCW" takes care of how to read ADCL and ADCH.
@@ -553,27 +549,24 @@ int readVcc() {
   ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
   ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);  // prescaler of 128
   ADCSRA |= _BV(ADEN);  // enable the ADC
+  ADCSRA |= _BV(ADIE);  // enable intterupt
 
-  // Wait for Vref to settle
+  // Wait for voltage to settle
   delay(10);
   // Take an ADC reading in sleep mode
   noInterrupts();
-  set_sleep_mode (SLEEP_MODE_ADC);
-  sleep_enable();
-  
   // Start conversion
   ADCSRA |= _BV(ADSC);
+  set_sleep_mode(SLEEP_MODE_ADC);
   interrupts();
-  sleep_cpu();     
-  sleep_disable();
 
   // Awake again, reading should be done, but better make sure
-  // maybe the timer interrupt fired 
+  // maybe the timer interrupt fired
   while (bit_is_set(ADCSRA, ADSC));
 
   // Reading register "ADCW" takes care of how to read ADCL and ADCH.
   long wADC = ADCW;
-  
+
   // Return Vcc in mV; 1125300 = 1.1 * 1024 * 1000
   // 1.1V calibration: 1.074
   return (int)(1099776UL / wADC);
