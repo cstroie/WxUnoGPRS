@@ -640,8 +640,8 @@ void loop() {
     // Illuminance value in lux
     long lux = 50L * (1024L - a0) / a0;
     // Calculate the solar radiation in mW/m^2
-    // FIXME this is in mW/m^2
-    int solRad = (int)(lux * 7.9);
+    // FIXME this is in cW/m^2
+    int solRad = (int)(lux * 0.79);
     // Set the bit 5 to show the sensor is present (reverse) and there is any light
     if (solRad > 0) aprsTlmBits |= B00100000;
     // Set the bit 4 to show the sensor is saturated
