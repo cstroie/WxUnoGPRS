@@ -473,10 +473,9 @@ int readAnalog(uint8_t pin) {
   // Allow for channel or pin numbers
   if (pin >= 14) pin -= 14;
   
-  // Set the analog reference (high two bits of ADMUX) and select the
-  // channel (low 4 bits).  This also sets ADLAR (left-adjust result)
-  // to 0 (the default).
-  ADMUX = (analog_reference << 6) | (pin & 0x07);
+  // Set the analog reference to DEFAULT, select the channel (low 4 bits).
+  // This also sets ADLAR (left-adjust result) to 0 (the default).
+  ADMUX = (_BV(REFS0)) | (pin & 0x07);
   
   // Prescaler of 128
   ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);
