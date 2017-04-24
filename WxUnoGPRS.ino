@@ -230,28 +230,33 @@ unsigned long timeUNIX(bool sync = true) {
   @return UNIX time from server
 */
 unsigned long timeSync() {
-  union {
-    uint32_t t = 0UL;
-    uint8_t  b[4];
-  } uxtm;
+  uint32_t t = 0UL;
+  uint8_t  b[4];
 
   // Try to establish the PPP link
-  int bytes = 4;
+  //int bytes = 4;
+  int bytes = -1;
   if (GPRS_Modem.pppConnect(apn)) {
     if (GPRS_Client.connect(timeServer, timePort)) {
-      // Read time during 5 seconds
-      unsigned int timeout = millis() + 5000UL;
-      while (millis() <= timeout and bytes > 0) {
-        char b = GPRS_Client.read();
-        if (b != -1) uxtm.b[bytes--] = uint8_t(b);
-      }
+      //// Read time during 5 seconds
+      //unsigned int timeout = millis() + 5000UL;
+      //while (millis() <= timeout and bytes > 0) {
+      //  char b = GPRS_Client.read();
+      //  if (b != -1) uxtm.b[bytes--] = uint8_t(b);
+      //}
+      bytes = GPRS_Client.read(b, sizeof(t));
+      delay(10);
       GPRS_Client.stop();
     }
   }
+  t |= (uint32_t)b[3] << 24;
+  t |= (uint32_t)b[2] << 16;
+  t |= (uint32_t)b[1] << 8;
+  t |= (uint32_t)b[0];
 
   // Convert 1900 epoch to 1970 Unix time, if valid time
-  if (bytes == sizeof(uxtm.t))
-    return uxtm.t - 2208988800UL;
+  if (bytes == sizeof(t))
+    return t - 2208988800UL;
   else
     return 0UL;
 }
