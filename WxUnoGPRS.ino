@@ -47,7 +47,7 @@
 
 // Device name
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "1.7";
+const char VERSION[]  PROGMEM = "2.0";
 bool  PROBE = true;    // True if the station is being probed
 
 // GPRS credentials
@@ -95,7 +95,7 @@ int         aprsTlmSeq    = 0;  // Telemetry sequence mumber
 char        aprsTlmBits   = B00000000;
 
 // The APRS connection client
-SoftwareSerial SerialAT(2, 3); // RX, TX
+SoftwareSerial SerialAT(3, 4); // RX, TX
 M590Drv GPRS_Modem;
 M590Client GPRS_Client(&GPRS_Modem);
 IPAddress ip;
@@ -617,6 +617,16 @@ void setup() {
   Serial.print(F(" "));
   Serial.println(__DATE__);
 
+  // Power on the modem
+  pinMode(6, OUTPUT);
+  digitalWrite(6, LOW);
+  delay(1000);
+  digitalWrite(6, HIGH);
+
+  // Low power control
+  pinMode(5, OUTPUT);
+  digitalWrite(6, HIGH);
+
   // Set GSM module baud rate
   SerialAT.begin(9600);
   // Initialize the modem, restart if failed
@@ -719,6 +729,7 @@ void loop() {
     //       then every 60/aprsRprtHour minutes)
     if (aprsMsrmCount == 1) {
       // TODO Wake up the modem if sleeping
+      digitalWrite(6, HIGH);
       // Try to establish the PPP link, restart if failed
       // TODO store to flash last measurements and time
       if (!GPRS_Modem.pppConnect(apn)) {
@@ -745,6 +756,7 @@ void loop() {
         }
         else Serial.println(F("Connection failed"));
         // TODO Send the modem to sleep
+        digitalWrite(6, LOW);
       }
     }
 
