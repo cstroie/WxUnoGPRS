@@ -25,7 +25,7 @@
 */
 
 // The DEBUG and DEVEL flag
-//#define DEBUG
+#define DEBUG
 #define DEVEL
 
 // Watchdog, sleep
@@ -47,7 +47,7 @@
 
 // Device name
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "2.0";
+const char VERSION[]  PROGMEM = "2.1";
 bool  PROBE = true;    // True if the station is being probed
 
 // GPRS credentials
@@ -86,7 +86,7 @@ bool          timeOk = false;
 int           eeTime = 0;
 
 // Reports and measurements
-const int   aprsRprtHour  = 10; // Number of APRS reports per hour
+const int   aprsRprtHour  = 20; // Number of APRS reports per hour
 const int   aprsMsrmMax   = 3;  // Number of measurements per report (keep even)
 int         aprsMsrmCount = 0;  // Measurements counter
 int         aprsTlmSeq    = 0;  // Telemetry sequence mumber
@@ -94,8 +94,15 @@ int         aprsTlmSeq    = 0;  // Telemetry sequence mumber
 // Telemetry bits
 char        aprsTlmBits   = B00000000;
 
+// M590 control pins
+const int   pinM590Ring  = 2;
+const int   pinM590Rx    = 3;
+const int   pinM590Tx    = 4;
+const int   pinM590Sleep = 5;
+const int   pinM590Power = 6;
+
 // The APRS connection client
-SoftwareSerial SerialAT(3, 4); // RX, TX
+SoftwareSerial SerialAT(pinM590Rx, pinM590Tx); // RX, TX
 M590Drv GPRS_Modem;
 M590Client GPRS_Client(&GPRS_Modem);
 IPAddress ip;
@@ -119,6 +126,9 @@ const unsigned long snsDelay    = 3600000UL / (aprsRprtHour * aprsMsrmMax);
 unsigned long       snsNextTime = 0UL;  // The next time to read the sensors
 Adafruit_BMP280 atmo;                   // The athmospheric sensor
 bool atmo_ok = false;                   // The athmospheric sensor flag
+
+
+void modemSleep(bool enable, bool initial = false);
 
 /**
   Simple median filter: get the median
@@ -230,33 +240,34 @@ unsigned long timeUNIX(bool sync = true) {
   @return UNIX time from server
 */
 unsigned long timeSync() {
-  uint32_t t = 0UL;
-  uint8_t  b[4];
+  union {
+    uint32_t t = 0UL;
+    uint8_t  b[4];
+  } uxtm;
 
+  // Wake up the modem (if power saving already enabled)
+  modemSleep(false);
   // Try to establish the PPP link
-  //int bytes = 4;
-  int bytes = -1;
+  int bytes = sizeof(uxtm.b);
   if (GPRS_Modem.pppConnect(apn)) {
     if (GPRS_Client.connect(timeServer, timePort)) {
-      //// Read time during 5 seconds
-      //unsigned int timeout = millis() + 5000UL;
-      //while (millis() <= timeout and bytes > 0) {
-      //  char b = GPRS_Client.read();
-      //  if (b != -1) uxtm.b[bytes--] = uint8_t(b);
-      //}
-      bytes = GPRS_Client.read(b, sizeof(t));
+      // Read time during 5 seconds
+      unsigned int timeout = millis() + 5000UL;
+      while (millis() <= timeout and bytes != 0) {
+        char b = GPRS_Client.read();
+        if (b != -1) uxtm.b[--bytes] = uint8_t(b);
+      }
       delay(10);
       GPRS_Client.stop();
     }
   }
-  t |= (uint32_t)b[3] << 24;
-  t |= (uint32_t)b[2] << 16;
-  t |= (uint32_t)b[1] << 8;
-  t |= (uint32_t)b[0];
+
+  // Send the modem to sleep (if power saving already enabled)
+  modemSleep(true);
 
   // Convert 1900 epoch to 1970 Unix time, if valid time
-  if (bytes == sizeof(t))
-    return t - 2208988800UL;
+  if (!bytes)
+    return (unsigned long)uxtm.t - 2208988800UL;
   else
     return 0UL;
 }
@@ -577,7 +588,7 @@ int readVcc() {
   return (int)(1099776UL / wADC);
 }
 
-/*
+/**
   Software reset
   (c) Mircea Diaconescu http://web-engineering.info/node/29
 */
@@ -588,6 +599,60 @@ void softReset(uint8_t prescaller) {
   // without sending the reset signal by using
   // the wdt_reset() method
   while (true) {}
+}
+
+/**
+  Power on/off the M590 modem
+
+  @param initial initially, configure the pin
+*/
+void modemOnOff(bool initial = false) {
+  if (initial) {
+    // Make sure the pin stays HIGH before using it
+    digitalWrite(pinM590Power, HIGH);
+    pinMode(pinM590Power, OUTPUT);
+  }
+  // Enable it for 1s, then disable and wait 5s more
+  digitalWrite(pinM590Power, LOW);
+  delay(1000);
+  digitalWrite(pinM590Power, HIGH);
+  delay(5000);
+}
+
+/**
+  Power on/off the M590 modem
+
+  @param enable enable or disable the low power mode
+  @param initial initially, configure the pin
+*/
+void modemSleep(bool enable, bool initial = false) {
+  if (initial) {
+    // Make sure the pin stays HIGH before using it
+    digitalWrite(pinM590Sleep, HIGH);
+    pinMode(pinM590Sleep, OUTPUT);
+    // Configure the modem to use power saving mode
+    GPRS_Modem.pwrSave();
+  }
+  if (enable) {
+#ifdef DEBUG
+    Serial.print(F("Putting the modem to sleep... "));
+#endif
+    digitalWrite(pinM590Sleep, LOW);
+    delay(2000);
+#ifdef DEBUG
+    Serial.println(F("done"));
+#endif
+  }
+  else {
+#ifdef DEBUG
+    Serial.print(F("Waking up the modem... "));
+#endif
+    digitalWrite(pinM590Sleep, HIGH);
+    delay(100);
+#ifdef DEBUG
+    Serial.println(F("done"));
+#endif
+  }
 }
 
 /**
@@ -617,16 +682,6 @@ void setup() {
   Serial.print(F(" "));
   Serial.println(__DATE__);
 
-  // Power on the modem
-  pinMode(6, OUTPUT);
-  digitalWrite(6, LOW);
-  delay(1000);
-  digitalWrite(6, HIGH);
-
-  // Low power control
-  pinMode(5, OUTPUT);
-  digitalWrite(6, HIGH);
-
   // Set GSM module baud rate
   SerialAT.begin(9600);
   // Initialize the modem, restart if failed
@@ -635,9 +690,14 @@ void setup() {
     timeUNIX();
   }
   else {
-    // Wait a minute
-    delay(60000);
-    softReset(WDTO_4S);
+#ifdef DEBUG
+    Serial.println(F("Trying to power on the modem, then restart"));
+#endif
+    // Try to enble the modem
+    modemOnOff(true);
+    // Wait a little
+    delay(20000);
+    softReset(WDTO_1S);
   }
 
   // BMP280
@@ -656,6 +716,9 @@ void setup() {
 
   // Start the sensor timer
   snsNextTime = millis();
+
+  // Send the modem to sleep
+  modemSleep(true, true);
 }
 
 /**
@@ -694,10 +757,6 @@ void loop() {
       aprsTlmBits |= B00001000;
     }
 
-    // Get RSSI (will get FALSE if the modem is not working)
-    int rssi = GPRS_Modem.getRSSI();
-    if (rssi) mdnIn(mRSSI, -rssi);
-
     // Various analog telemetry
     int a0 = readAnalog(A0);
     int a1 = readAnalog(A1);
@@ -728,8 +787,11 @@ void loop() {
     // APRS (after the first 3600/(aprsMsrmMax*aprsRprtHour) seconds,
     //       then every 60/aprsRprtHour minutes)
     if (aprsMsrmCount == 1) {
-      // TODO Wake up the modem if sleeping
-      digitalWrite(6, HIGH);
+      // Wake up the modem, if sleeping
+      modemSleep(false);
+      // Get RSSI (will get FALSE (0) if the modem is not working)
+      int rssi = GPRS_Modem.getRSSI();
+      if (rssi) mdnIn(mRSSI, -rssi);
       // Try to establish the PPP link, restart if failed
       // TODO store to flash last measurements and time
       if (!GPRS_Modem.pppConnect(apn)) {
@@ -755,8 +817,8 @@ void loop() {
           GPRS_Client.stop();
         }
         else Serial.println(F("Connection failed"));
-        // TODO Send the modem to sleep
-        digitalWrite(6, LOW);
+        // Send the modem to sleep
+        modemSleep(true);
       }
     }
 
