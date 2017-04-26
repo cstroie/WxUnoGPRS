@@ -25,7 +25,7 @@
 */
 
 // The DEBUG and DEVEL flag
-#define DEBUG
+//#define DEBUG
 #define DEVEL
 
 // Watchdog, sleep
@@ -86,7 +86,7 @@ bool          timeOk = false;
 int           eeTime = 0;
 
 // Reports and measurements
-const int   aprsRprtHour  = 20; // Number of APRS reports per hour
+const int   aprsRprtHour  = 10; // Number of APRS reports per hour
 const int   aprsMsrmMax   = 3;  // Number of measurements per report (keep even)
 int         aprsMsrmCount = 0;  // Measurements counter
 int         aprsTlmSeq    = 0;  // Telemetry sequence mumber
@@ -107,7 +107,9 @@ M590Drv GPRS_Modem;
 M590Client GPRS_Client(&GPRS_Modem);
 IPAddress ip;
 // The APRS packet buffer
-char aprsPkt[120] = "";
+char          aprsPkt[120] = "";
+// Time the modem worked
+unsigned long linkLastTime = 0UL;
 
 // When ADC completed, take an interrupt
 EMPTY_INTERRUPT(ADC_vect);
@@ -589,7 +591,7 @@ int readVcc() {
 }
 
 /**
-  Software reset
+  Software reset the MCU
   (c) Mircea Diaconescu http://web-engineering.info/node/29
 */
 void softReset(uint8_t prescaller) {
@@ -691,11 +693,11 @@ void setup() {
   }
   else {
 #ifdef DEBUG
-    Serial.println(F("Trying to power on the modem, then restart"));
+    Serial.println(F("Trying to power on the modem, then reset the MCU"));
 #endif
     // Try to enble the modem
     modemOnOff(true);
-    // Wait a little
+    // Wait a little and reset the MCU
     delay(20000);
     softReset(WDTO_1S);
   }
@@ -792,14 +794,19 @@ void loop() {
       // Get RSSI (will get FALSE (0) if the modem is not working)
       int rssi = GPRS_Modem.getRSSI();
       if (rssi) mdnIn(mRSSI, -rssi);
-      // Try to establish the PPP link, restart if failed
+      // Try to establish the PPP link, restart if failed too many times
       // TODO store to flash last measurements and time
       if (!GPRS_Modem.pppConnect(apn)) {
-        Serial.println(F("PPP link failed, restarting..."));
-        // If time is good, store it
-        if (timeOk) timeEEWrite(tm);
-        // Reset
-        softReset(WDTO_4S);
+        // Check if we failed for too long (2 * 60 *60 / aprsRprtHour)
+        if (millis() >= linkLastTime + 7200000UL / aprsRprtHour) {
+          Serial.println(F("PPP link failed for too long, resetting all"));
+          // If time is good, store it
+          if (timeOk) timeEEWrite(tm);
+          // Try to power off the modem (need 5s)
+          GPRS_Modem.powerDown();
+          // Reset the MCU (in 8s)
+          softReset(WDTO_8S);
+        }
       }
       else {
         // Connect to APRS server
@@ -815,8 +822,21 @@ void loop() {
                             aprsTlmBits);
           //aprsSendStatus("Fine weather");
           GPRS_Client.stop();
+          // Keep the millis the connection worked
+          linkLastTime = millis();
         }
-        else Serial.println(F("Connection failed"));
+        else {
+          // Check if we failed for too long (2 * 60 *60 / aprsRprtHour)
+          if (millis() >= linkLastTime + 7200000UL / aprsRprtHour) {
+            Serial.println(F("Connection failed for too long, resetting all"));
+            // If time is good, store it
+            if (timeOk) timeEEWrite(tm);
+            // Try to power off the modem (need 5s)
+            GPRS_Modem.powerDown();
+            // Reset the MCU (in 8s)
+            softReset(WDTO_8S);
+          }
+        }
         // Send the modem to sleep
         modemSleep(true);
       }
