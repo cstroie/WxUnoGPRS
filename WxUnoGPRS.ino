@@ -106,8 +106,8 @@ SoftwareSerial SerialAT(pinM590Rx, pinM590Tx); // RX, TX
 M590Drv GPRS_Modem;
 M590Client GPRS_Client(&GPRS_Modem);
 IPAddress ip;
-// The APRS packet buffer
-char          aprsPkt[120] = "";
+// The APRS packet buffer, largest packet is 82 for now
+char          aprsPkt[100] = "";
 // Time the modem worked
 unsigned long linkLastTime = 0UL;
 
