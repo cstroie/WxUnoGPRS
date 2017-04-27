@@ -64,7 +64,7 @@ const int   altMeters = 83;   // Bucharest
 const int   altMeters = 282;  // Targoviste
 #endif
 const long  altFeet = (long)(altMeters * 3.28084);
-float altCorr = pow((float)(1.0 - 2.25577e-5 * altMeters), (float)(-5.25578));
+const float altCorr = pow((float)(1.0 - 2.25577e-5 * altMeters), (float)(-5.25578));
 
 const char aprsCallSign[] PROGMEM = "FW0727";
 const char aprsPassCode[] PROGMEM = "-1";
