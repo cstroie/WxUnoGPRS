@@ -45,26 +45,26 @@
 #include <M590Client.h>
 #include <SoftwareSerial.h>
 
-// Device name
+// Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
 const char VERSION[]  PROGMEM = "2.1";
-bool  PROBE = true;    // True if the station is being probed
+bool  PROBE = true;                         // True if the station is being probed
 
 // GPRS credentials
-const char *apn  = "internet.simfony.net";
-const char *user = "";
-const char *pass = "";
+const char *apn  = "internet.simfony.net";  // GPRS access point
+const char *user = "";                      // GPRS user name
+const char *pass = "";                      // GPRS password
 
 // APRS parameters
-const char *aprsServer = "cwop5.aprs.net";
-const int   aprsPort = 14580;
+const char *aprsServer = "cwop5.aprs.net";  // CWOP APRS-IS server address to connect to
+const int   aprsPort = 14580;               // CWOP APRS-IS port
 #ifdef DEVEL
-const int   altMeters = 83;   // Bucharest
+const int   altMeters = 83;                 // Altitude in Bucharest
 #else
-const int   altMeters = 282;  // Targoviste
+const int   altMeters = 282;                // Altitude in Targoviste
 #endif
-const long  altFeet = (long)(altMeters * 3.28084);
-const float altCorr = pow((float)(1.0 - 2.25577e-5 * altMeters), (float)(-5.25578));
+const long  altFeet = (long)(altMeters * 3.28084);                                    // Altitude in feet
+const float altCorr = pow((float)(1.0 - 2.25577e-5 * altMeters), (float)(-5.25578));  // Altitude correction for QNH
 
 const char aprsCallSign[] PROGMEM = "FW0727";
 const char aprsPassCode[] PROGMEM = "-1";
@@ -76,60 +76,57 @@ const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,low,err,N
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10011111, ";
 const char eol[]          PROGMEM = "\r\n";
 
-// Time
-const char   *timeServer = "utcnist.colorado.edu";
-const int     timePort = 37;
-unsigned long timeNextSync = 0UL;
-unsigned long timeDelta = 0UL;
-bool          timeOk = false;
-// EEPROM address for storing last known time
-int           eeTime = 0;
+char          aprsPkt[100] = "";                      // The APRS packet buffer, largest packet is 82 for v2.1
+
+// Time synchronization and keeping
+const char   *timeServer   = "utcnist.colorado.edu";  // Time server address to connect to (RFC868)
+const int     timePort     = 37;                      // Time server port
+unsigned long timeNextSync = 0UL;                     // Next time to syncronize
+unsigned long timeDelta    = 0UL;                     // Difference between real time and internal clock
+bool          timeOk       = false;                   // Flag to know the time is accurate
+const int     eeTime       = 0;                       // EEPROM address for storing last known good time
 
 // Reports and measurements
-const int   aprsRprtHour  = 10; // Number of APRS reports per hour
-const int   aprsMsrmMax   = 3;  // Number of measurements per report (keep even)
-int         aprsMsrmCount = 0;  // Measurements counter
-int         aprsTlmSeq    = 0;  // Telemetry sequence mumber
+const int aprsRprtHour   = 10; // Number of APRS reports per hour
+const int aprsMsrmMax    = 3;  // Number of measurements per report (keep even)
+int       aprsMsrmCount  = 0;  // Measurements counter
+int       aprsTlmSeq     = 0;  // Telemetry sequence mumber
 
 // Telemetry bits
-char        aprsTlmBits   = B00000000;
+char      aprsTlmBits    = B00000000;
 
 // M590 control pins
-const int   pinM590Ring  = 2;
-const int   pinM590Rx    = 3;
-const int   pinM590Tx    = 4;
-const int   pinM590Sleep = 5;
-const int   pinM590Power = 6;
+const int pinM590Ring    = 2;  // Incoming call/sms signal
+const int pinM590Rx      = 3;  // MCU RX
+const int pinM590Tx      = 4;  // MCU TX
+const int pinM590Sleep   = 5;  // Modem low power control
+const int pinM590Power   = 6;  // Modem On/Off control
 
-// The APRS connection client
-SoftwareSerial SerialAT(pinM590Rx, pinM590Tx); // RX, TX
-M590Drv GPRS_Modem;
-M590Client GPRS_Client(&GPRS_Modem);
-IPAddress ip;
-// The APRS packet buffer, largest packet is 82 for now
-char          aprsPkt[100] = "";
-// Time the modem worked
-unsigned long linkLastTime = 0UL;
+// Modemm and connection client
+SoftwareSerial  SerialAT(pinM590Rx, pinM590Tx); // Software RS232 link to modem
+M590Drv         GPRS_Modem;                     // Modem driver
+M590Client      GPRS_Client(&GPRS_Modem);       // GPRS client
+unsigned long   linkLastTime = 0UL;             // Last time the modem and tcp connected
 
 // When ADC completed, take an interrupt
 EMPTY_INTERRUPT(ADC_vect);
 
 // Statistics (round median filter for the last 3 values)
-int mTemp[4];
-int mPres[4];
-int mRSSI[4];
-int mRad[4];
-int mVcc[4];
-int mA0[4];
-int mA1[4];
+int mTemp[4]; // Athmospheric temperature
+int mPres[4]; // Athmospheric pressure
+int mRSSI[4]; // GSM RSSI
+int mRad[4];  // Solar radiation
+int mVcc[4];  // Power supply voltage
+int mA0[4];   // Analog sensor
+int mA1[4];   // Analog sensor
 
 // Sensors
-const unsigned long snsDelay    = 3600000UL / (aprsRprtHour * aprsMsrmMax);
-unsigned long       snsNextTime = 0UL;  // The next time to read the sensors
-Adafruit_BMP280 atmo;                   // The athmospheric sensor
-bool atmo_ok = false;                   // The athmospheric sensor flag
+const unsigned long snsDelay    = 3600000UL / (aprsRprtHour * aprsMsrmMax); // Delay between sensor readings
+unsigned long       snsNextTime = 0UL;                                      // Next time to read the sensors
+Adafruit_BMP280     atmo;                                                   // The athmospheric sensor
+bool                atmo_ok = false;                                        // The athmospheric sensor presence flag
 
-
+// Function prototypes
 void modemSleep(bool enable, bool initial = false);
 
 /**
@@ -140,13 +137,14 @@ void modemSleep(bool enable, bool initial = false);
   @return the median
 */
 int mdnOut(int *buf) {
+  // Return the last value if the buffer is not full yet
   if (buf[0] < 3) return buf[3];
   else {
+    // Get the maximum and the minimum
     int the_max = max(max(buf[1], buf[2]), buf[3]);
     int the_min = min(min(buf[1], buf[2]), buf[3]);
-    // unnecessarily clever code
-    int the_median = the_max ^ the_min ^ buf[1] ^ buf[2] ^ buf[3];
-    return the_median;
+    // Clever code: XOR the max and min, remaining the middle
+    return the_max ^ the_min ^ buf[1] ^ buf[2] ^ buf[3];
   }
 }
 
@@ -157,7 +155,9 @@ int mdnOut(int *buf) {
   @param x the value to add
 */
 void mdnIn(int *buf, int x) {
+  // At index 0 there is the number of values stored
   if (buf[0] < 3) buf[0]++;
+  // Shift one position
   buf[1] = buf[2];
   buf[2] = buf[3];
   buf[3] = x;
@@ -167,7 +167,7 @@ void mdnIn(int *buf, int x) {
   Write the time to EEPROM, along with CRC32: 8 bytes
 */
 void timeEEWrite(unsigned long tm) {
-  // Create a CRC32 checksum calculator.
+  // Compute CRC32 checksum
   CRC32 crc;
   crc.update(&tm, sizeof(tm));
   unsigned long ck = crc.finalize();
@@ -181,9 +181,10 @@ void timeEEWrite(unsigned long tm) {
 */
 unsigned long timeEERead() {
   unsigned long tm, tc;
+  // Read the data
   EEPROM.get(eeTime, tm);
   EEPROM.get(eeTime + sizeof(tm), tc);
-  // Create a CRC32 checksum calculator.
+  // Compute CRC32 checksum
   CRC32 crc;
   crc.update(&tm, sizeof(tm));
   unsigned long ck = crc.finalize();
@@ -193,7 +194,7 @@ unsigned long timeEERead() {
 }
 
 /**
-  Get current time as UNIX time
+  Get current time as UNIX time (1970 epoch)
 
   @return current UNIX time
 */
