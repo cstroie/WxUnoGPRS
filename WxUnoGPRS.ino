@@ -48,20 +48,20 @@
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
 const char VERSION[]  PROGMEM = "2.1";
-bool  PROBE = true;                         // True if the station is being probed
+bool       PROBE              = true;       // True if the station is being probed
 
 // GPRS credentials
-const char *apn  = "internet.simfony.net";  // GPRS access point
-const char *user = "";                      // GPRS user name
-const char *pass = "";                      // GPRS password
+const char apn[]  PROGMEM = "internet.simfony.net";  // GPRS access point
+const char user[] PROGMEM = "";                      // GPRS user name
+const char pass[] PROGMEM = "";                      // GPRS password
 
 // APRS parameters
-const char *aprsServer = "cwop5.aprs.net";  // CWOP APRS-IS server address to connect to
-const int   aprsPort = 14580;               // CWOP APRS-IS port
+const char  aprsServer[] PROGMEM  = "cwop5.aprs.net";   // CWOP APRS-IS server address to connect to
+const int   aprsPort              = 14580;              // CWOP APRS-IS port
 #ifdef DEVEL
-const int   altMeters = 83;                 // Altitude in Bucharest
+const int   altMeters             = 83;                 // Altitude in Bucharest
 #else
-const int   altMeters = 282;                // Altitude in Targoviste
+const int   altMeters             = 282;                // Altitude in Targoviste
 #endif
 const long  altFeet = (long)(altMeters * 3.28084);                                    // Altitude in feet
 const float altCorr = pow((float)(1.0 - 2.25577e-5 * altMeters), (float)(-5.25578));  // Altitude correction for QNH
@@ -76,15 +76,15 @@ const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,low,err,N
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10011111, ";
 const char eol[]          PROGMEM = "\r\n";
 
-char          aprsPkt[100] = "";                      // The APRS packet buffer, largest packet is 82 for v2.1
+char       aprsPkt[100]           = "";     // The APRS packet buffer, largest packet is 82 for v2.1
 
 // Time synchronization and keeping
-const char   *timeServer   = "utcnist.colorado.edu";  // Time server address to connect to (RFC868)
-const int     timePort     = 37;                      // Time server port
-unsigned long timeNextSync = 0UL;                     // Next time to syncronize
-unsigned long timeDelta    = 0UL;                     // Difference between real time and internal clock
-bool          timeOk       = false;                   // Flag to know the time is accurate
-const int     eeTime       = 0;                       // EEPROM address for storing last known good time
+const char    timeServer[] PROGMEM  = "utcnist.colorado.edu";  // Time server address to connect to (RFC868)
+const int     timePort              = 37;                      // Time server port
+unsigned long timeNextSync          = 0UL;                     // Next time to syncronize
+unsigned long timeDelta             = 0UL;                     // Difference between real time and internal clock
+bool          timeOk                = false;                   // Flag to know the time is accurate
+const int     eeTime                = 0;                       // EEPROM address for storing last known good time
 
 // Reports and measurements
 const int aprsRprtHour   = 10; // Number of APRS reports per hour
@@ -253,8 +253,8 @@ unsigned long timeSync() {
   
   // Try to establish the PPP link
   int bytes = sizeof(uxtm.b);
-  if (GPRS_Modem.pppConnect(apn)) {
-    if (GPRS_Client.connect(timeServer, timePort)) {
+  if (GPRS_Modem.pppConnect_P(apn)) {
+    if (GPRS_Client.connect_P(timeServer, timePort)) {
       // Read network time during 5 seconds
       unsigned long timeout = millis() + 5000UL;
       while (millis() <= timeout and bytes != 0) {
@@ -795,7 +795,7 @@ void loop() {
       if (rssi) mdnIn(mRSSI, -rssi);
       // Try to establish the PPP link, restart if failed too many times
       // TODO store to flash last measurements and time
-      if (!GPRS_Modem.pppConnect(apn)) {
+      if (!GPRS_Modem.pppConnect_P(apn)) {
         // Check if we failed for too long (2 * 60 *60 / aprsRprtHour)
         if (millis() >= linkLastTime + 7200000UL / aprsRprtHour) {
           Serial.println(F("PPP link failed for too long, resetting all"));
@@ -809,7 +809,7 @@ void loop() {
       }
       else {
         // Connect to APRS server
-        if (GPRS_Client.connect(aprsServer, aprsPort)) {
+        if (GPRS_Client.connect_P(aprsServer, aprsPort)) {
           aprsAuthenticate();
           //aprsSendPosition(" WxUnoProbe");
           if (atmo_ok) aprsSendWeather(mdnOut(mTemp), -1, mdnOut(mPres), mdnOut(mRad));
