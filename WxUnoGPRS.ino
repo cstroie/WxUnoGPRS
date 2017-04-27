@@ -236,7 +236,7 @@ unsigned long timeUNIX(bool sync = true) {
   return (millis() / 1000) + timeDelta;
 }
 
-/*
+/**
   Connect to a time server using the RFC 868 time protocol
 
   @return UNIX time from server
@@ -249,29 +249,27 @@ unsigned long timeSync() {
 
   // Wake up the modem (if power saving already enabled)
   modemSleep(false);
+  
   // Try to establish the PPP link
   int bytes = sizeof(uxtm.b);
   if (GPRS_Modem.pppConnect(apn)) {
     if (GPRS_Client.connect(timeServer, timePort)) {
-      // Read time during 5 seconds
-      unsigned int timeout = millis() + 5000UL;
+      // Read network time during 5 seconds
+      unsigned long timeout = millis() + 5000UL;
       while (millis() <= timeout and bytes != 0) {
         char b = GPRS_Client.read();
         if (b != -1) uxtm.b[--bytes] = uint8_t(b);
       }
-      delay(10);
       GPRS_Client.stop();
     }
   }
-
+  
   // Send the modem to sleep (if power saving already enabled)
   modemSleep(true);
 
-  // Convert 1900 epoch to 1970 Unix time, if valid time
-  if (!bytes)
-    return (unsigned long)uxtm.t - 2208988800UL;
-  else
-    return 0UL;
+  // Convert 1900 epoch to 1970 Unix time, if read data is valid
+  if (!bytes) return (unsigned long)uxtm.t - 2208988800UL;
+  else        return 0UL;
 }
 
 /**
