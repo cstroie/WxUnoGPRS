@@ -250,7 +250,7 @@ unsigned long timeSync() {
 
   // Wake up the modem (if power saving already enabled)
   modemSleep(false);
-  
+
   // Try to establish the PPP link
   int bytes = sizeof(uxtm.b);
   if (GPRS_Modem.pppConnect_P(apn)) {
@@ -262,9 +262,11 @@ unsigned long timeSync() {
         if (b != -1) uxtm.b[--bytes] = uint8_t(b);
       }
       GPRS_Client.stop();
+      // Keep the millis the connection worked
+      linkLastTime = millis();
     }
   }
-  
+
   // Send the modem to sleep (if power saving already enabled)
   modemSleep(true);
 
@@ -286,13 +288,13 @@ void aprsSend(const char *pkt) {
 }
 
 /**
-  Return time in APRS format: DDHHMMz
+  Return time in zulu APRS format: HHMMSSh
 
   @param *buf the buffer to return the time to
   @param len the buffer length
 */
 char aprsTime(char *buf, size_t len) {
-  // Get the time, but do not open a connection
+  // Get the time, but do not open a connection to server
   unsigned long utm = timeUNIX(false);
   // Compute hour, minute and second
   int hh = (utm % 86400L) / 3600;
@@ -470,7 +472,7 @@ void aprsSendStatus(const char *message) {
 
   @param comment the comment to append
 */
-void aprsSendPosition(const char *comment) {
+void aprsSendPosition(const char *comment = NULL) {
   // Compose the APRS packet
   strcpy_P(aprsPkt, aprsCallSign);
   strcat_P(aprsPkt, aprsPath);
@@ -480,7 +482,7 @@ void aprsSendPosition(const char *comment) {
   char buf[7];
   sprintf_P(buf, PSTR("%06d"), altFeet);
   strncat(aprsPkt, buf, sizeof(buf));
-  strcat(aprsPkt, comment);
+  if (comment != NULL) strcat(aprsPkt, comment);
   strcat_P(aprsPkt, eol);
   aprsSend(aprsPkt);
 }
@@ -603,7 +605,7 @@ void softReset(uint8_t prescaller) {
 }
 
 /**
-  Power on/off the M590 modem
+  Power on/off the M590 modem (6s)
 
   @param initial initially, configure the pin
 */
@@ -675,8 +677,8 @@ void print_P(const char *str) {
 */
 void setup() {
   // Init the serial com
-  Serial.println();
   Serial.begin(9600);
+  Serial.println();
   print_P(NODENAME);
   Serial.print(F(" "));
   print_P(VERSION);
@@ -685,7 +687,7 @@ void setup() {
 
   // Set GSM module baud rate
   SerialAT.begin(9600);
-  // Initialize the modem, restart if failed
+  // Initialize the modem, restart if failed (total time to restart: 30s)
   if (GPRS_Modem.begin(&SerialAT, SIM_PRESENT)) {
     // Start time sync
     timeUNIX();
@@ -697,18 +699,18 @@ void setup() {
     // Try to enble the modem
     modemOnOff(true);
     // Wait a little and reset the MCU
-    delay(20000);
-    softReset(WDTO_1S);
+    delay(15000);
+    softReset(WDTO_4S);
   }
 
   // BMP280
   if (atmo.begin(0x76)) {
     atmo_ok = true;
-    Serial.println(F("BMP280 sensor detected."));
+    Serial.println(F("BMP280 sensor detected"));
   }
   else {
     atmo_ok = false;
-    Serial.println(F("BMP280 sensor missing."));
+    Serial.println(F("BMP280 sensor missing"));
   }
 
   // Initialize the random number generator and set the APRS telemetry start sequence
@@ -810,9 +812,13 @@ void loop() {
       else {
         // Connect to APRS server
         if (GPRS_Client.connect_P(aprsServer, aprsPort)) {
+          // Authentication
           aprsAuthenticate();
-          //aprsSendPosition(" WxUnoProbe");
+          // Send the position, altitude and comment in firsts minutes after boot
+          if (millis() < snsDelay + snsDelay) aprsSendPosition();
+          // Send weather data if the athmospheric sensor is present
           if (atmo_ok) aprsSendWeather(mdnOut(mTemp), -1, mdnOut(mPres), mdnOut(mRad));
+          // Send the telemetry
           aprsSendTelemetry(mdnOut(mA0) / 20,
                             mdnOut(mA1) / 20,
                             mdnOut(mRSSI),
@@ -820,6 +826,7 @@ void loop() {
                             readMCUTemp() / 100 + 100,
                             aprsTlmBits);
           //aprsSendStatus("Fine weather");
+          // Close the connection
           GPRS_Client.stop();
           // Keep the millis the connection worked
           linkLastTime = millis();
