@@ -112,13 +112,9 @@ unsigned long   linkLastTime = 0UL;             // Last time the modem and tcp c
 EMPTY_INTERRUPT(ADC_vect);
 
 // Statistics (round median filter for the last 3 values)
-int mTemp[4]; // Athmospheric temperature
-int mPres[4]; // Athmospheric pressure
-int mRSSI[4]; // GSM RSSI
-int mRad[4];  // Solar radiation
-int mVcc[4];  // Power supply voltage
-int mA0[4];   // Analog sensor
-int mA1[4];   // Analog sensor
+enum      rMedIdx {MD_TEMP, MD_PRES, MD_RSSI, MD_SRAD, MD_VCC, MD_A0, MD_A1, MD_ALL};
+int       rMed[MD_ALL][4];
+const int eeRMed = 16; // EEPROM address for storing the round median array
 
 // Sensors
 const unsigned long snsDelay    = 3600000UL / (aprsRprtHour * aprsMsrmMax); // Delay between sensor readings
@@ -133,38 +129,69 @@ void modemSleep(bool enable, bool initial = false);
   Simple median filter: get the median
   2014-03-25: started by David Cary
 
-  @param *buf the round median buffer
+  @param idx the index in round median array
   @return the median
 */
-int mdnOut(int *buf) {
+int rMedOut(int idx) {
   // Return the last value if the buffer is not full yet
-  if (buf[0] < 3) return buf[3];
+  if (rMed[idx][0] < 3) return rMed[idx][3];
   else {
     // Get the maximum and the minimum
-    int the_max = max(max(buf[1], buf[2]), buf[3]);
-    int the_min = min(min(buf[1], buf[2]), buf[3]);
+    int the_max = max(max(rMed[idx][1], rMed[idx][2]), rMed[idx][3]);
+    int the_min = min(min(rMed[idx][1], rMed[idx][2]), rMed[idx][3]);
     // Clever code: XOR the max and min, remaining the middle
-    return the_max ^ the_min ^ buf[1] ^ buf[2] ^ buf[3];
+    return the_max ^ the_min ^ rMed[idx][1] ^ rMed[idx][2] ^ rMed[idx][3];
   }
 }
 
 /**
-  Simple median filter: add value to buffer
+  Simple median filter: add value to array
 
-  @param *buf the round median buffer
+  @param idx the index in round median array
   @param x the value to add
 */
-void mdnIn(int *buf, int x) {
+void rMedIn(int idx, int x) {
   // At index 0 there is the number of values stored
-  if (buf[0] < 3) buf[0]++;
+  if (rMed[idx][0] < 3) rMed[idx][0]++;
   // Shift one position
-  buf[1] = buf[2];
-  buf[2] = buf[3];
-  buf[3] = x;
+  rMed[idx][1] = rMed[idx][2];
+  rMed[idx][2] = rMed[idx][3];
+  rMed[idx][3] = x;
+}
+
+/**
+  Write the round median array to EEPROM, along with CRC32: 60 bytes = sizeof(int) * 4 * MD_ALL + 4 bytes
+*/
+void rMedEEWrite() {
+  // Compute CRC32 checksum
+  CRC32 crc32;
+  crc32.update(&rMed, sizeof(rMed));
+  unsigned long crc = crc32.finalize();
+  // Write the data
+  EEPROM.put(eeRMed, rMed);
+  EEPROM.put(eeRMed + sizeof(rMed), crc);
+}
+
+/**
+  Read the round median array from EEPROM, along with CRC32 and verify
+*/
+void rMedEERead() {
+  unsigned long ck;
+  // Read the data
+  EEPROM.get(eeRMed, rMed);
+  EEPROM.get(eeRMed + sizeof(rMed), ck);
+  // Compute CRC32 checksum
+  CRC32 crc32;
+  crc32.update(&rMed, sizeof(rMed));
+  unsigned long crc = crc32.finalize();
+  // Verify and zero it if check fails
+  if (crc != ck) memset(&rMed, 0, sizeof(rMed));
 }
 
 /**
   Write the time to EEPROM, along with CRC32: 8 bytes
+
+  @param tm the time value to store
 */
 void timeEEWrite(unsigned long tm) {
   // Compute CRC32 checksum
@@ -196,6 +223,7 @@ unsigned long timeEERead() {
 /**
   Get current time as UNIX time (1970 epoch)
 
+  @param sync flag to show whether network sync is to be performed
   @return current UNIX time
 */
 unsigned long timeUNIX(bool sync = true) {
@@ -666,6 +694,8 @@ void linkFailed() {
     Serial.println(F("PPP link failed for the last reports, resetting all"));
     // If time is good, store it
     if (timeOk) timeEEWrite(timeUNIX(false));
+    // Store the round median array
+    rMedEEWrite();
     // Try to power off the modem (need 5s)
     GPRS_Modem.powerDown();
     // Reset the MCU (in 8s)
@@ -699,6 +729,9 @@ void setup() {
   print_P(VERSION);
   Serial.print(F(" "));
   Serial.println(__DATE__);
+
+  // Try to restore the round median array
+  rMedEERead();
 
   // Set GSM module baud rate
   SerialAT.begin(9600);
@@ -758,13 +791,13 @@ void loop() {
       temp = atmo.readTemperature();
       pres = atmo.readPressure();
       // Add to the round median filter
-      mdnIn(mTemp, (int)(temp * 9 / 5 + 32));      // Store directly integer Fahrenheit
-      mdnIn(mPres, (int)(pres * altCorr / 10.0));  // Store directly sea level in dPa
+      rMedIn(MD_TEMP, (int)(temp * 9 / 5 + 32));      // Store directly integer Fahrenheit
+      rMedIn(MD_PRES, (int)(pres * altCorr / 10.0));  // Store directly sea level in dPa
     }
 
     // Read Vcc (mV) and add to the round median filter
     int vcc = readVcc();
-    mdnIn(mVcc, vcc);
+    rMedIn(MD_VCC, vcc);
     if (vcc < 4750 or vcc > 5250) {
       // Set the bit 3 to show the USB voltage is wrong (5V +/- 5%)
       aprsTlmBits |= B00001000;
@@ -775,8 +808,8 @@ void loop() {
     int a1 = readAnalog(A1);
 
     // Add to round median filter, mV (a / 1024 * Vcc)
-    mdnIn(mA0, (vcc * (unsigned long)a0) / 1024);
-    mdnIn(mA1, (vcc * (unsigned long)a1) / 1024);
+    rMedIn(MD_A0, (vcc * (unsigned long)a0) / 1024);
+    rMedIn(MD_A1, (vcc * (unsigned long)a1) / 1024);
 
     // Upper part
     // 500 / R(kO); R = R0(1024 / x - 1)
@@ -795,7 +828,7 @@ void loop() {
     // Set the bit 4 to show the sensor is saturated
     if (solRad > 999) aprsTlmBits |= B00010000;
     // Add to round median filter
-    mdnIn(mRad, solRad);
+    rMedIn(MD_SRAD, solRad);
 
     // APRS (after the first 3600/(aprsMsrmMax*aprsRprtHour) seconds,
     //       then every 60/aprsRprtHour minutes)
@@ -804,7 +837,7 @@ void loop() {
       modemSleep(false);
       // Get RSSI (will get FALSE (0) if the modem is not working)
       int rssi = GPRS_Modem.getRSSI();
-      if (rssi) mdnIn(mRSSI, -rssi);
+      if (rssi) rMedIn(MD_RSSI, -rssi);
       // Try to establish the PPP link, restart if it failed the last two reports
       // TODO store to flash last measurements
       if (GPRS_Modem.pppConnect_P(apn)) {
@@ -815,12 +848,12 @@ void loop() {
           // Send the position, altitude and comment in firsts minutes after boot
           if (millis() < snsDelay + snsDelay) aprsSendPosition();
           // Send weather data if the athmospheric sensor is present
-          if (atmo_ok) aprsSendWeather(mdnOut(mTemp), -1, mdnOut(mPres), mdnOut(mRad));
+          if (atmo_ok) aprsSendWeather(rMedOut(MD_TEMP), -1, rMedOut(MD_PRES), rMedOut(MD_SRAD));
           // Send the telemetry
-          aprsSendTelemetry(mdnOut(mA0) / 20,
-                            mdnOut(mA1) / 20,
-                            mdnOut(mRSSI),
-                            (mdnOut(mVcc) - 4500) / 4,
+          aprsSendTelemetry(rMedOut(MD_A0) / 20,
+                            rMedOut(MD_A1) / 20,
+                            rMedOut(MD_RSSI),
+                            (rMedOut(MD_VCC) - 4500) / 4,
                             readMCUTemp() / 100 + 100,
                             aprsTlmBits);
           //aprsSendStatus("Fine weather");
