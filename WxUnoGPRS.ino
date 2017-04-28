@@ -25,7 +25,7 @@
 */
 
 // The DEBUG and DEVEL flag
-//#define DEBUG
+#define DEBUG
 #define DEVEL
 
 // Watchdog, sleep
@@ -117,10 +117,12 @@ int       rMed[MD_ALL][4];
 const int eeRMed = 16; // EEPROM address for storing the round median array
 
 // Sensors
-const unsigned long snsDelay    = 3600000UL / (aprsRprtHour * aprsMsrmMax); // Delay between sensor readings
-unsigned long       snsNextTime = 0UL;                                      // Next time to read the sensors
-Adafruit_BMP280     atmo;                                                   // The athmospheric sensor
-bool                atmo_ok = false;                                        // The athmospheric sensor presence flag
+const unsigned long snsReadTime = 30UL * 1000UL;                          // Total time to read sensors, repeatedly, for aprsMsrmMax times
+const unsigned long snsDelayBfr = 3600000UL / aprsRprtHour - snsReadTime; // Delay before sensor readings
+const unsigned long snsDelayBtw = snsReadTime / aprsMsrmMax;              // Delay between sensor readings
+unsigned long       snsNextTime = 0UL;                                    // Next time to read the sensors
+Adafruit_BMP280     atmo;                                                 // The athmospheric sensor
+bool                atmo_ok = false;                                      // The athmospheric sensor presence flag
 
 // Function prototypes
 void modemSleep(bool enable, bool initial = false);
@@ -176,16 +178,16 @@ void rMedEEWrite() {
   Read the round median array from EEPROM, along with CRC32 and verify
 */
 void rMedEERead() {
-  unsigned long ck;
+  unsigned long eck;
   // Read the data
   EEPROM.get(eeRMed, rMed);
-  EEPROM.get(eeRMed + sizeof(rMed), ck);
+  EEPROM.get(eeRMed + sizeof(rMed), eck);
   // Compute CRC32 checksum
   CRC32 crc32;
   crc32.update(&rMed, sizeof(rMed));
   unsigned long crc = crc32.finalize();
   // Verify and zero it if check fails
-  if (crc != ck) memset(&rMed, 0, sizeof(rMed));
+  if (crc != eck) memset(&rMed, 0, sizeof(rMed));
 }
 
 /**
@@ -193,31 +195,31 @@ void rMedEERead() {
 
   @param tm the time value to store
 */
-void timeEEWrite(unsigned long tm) {
+void timeEEWrite(unsigned long utm) {
   // Compute CRC32 checksum
-  CRC32 crc;
-  crc.update(&tm, sizeof(tm));
-  unsigned long ck = crc.finalize();
+  CRC32 crc32;
+  crc32.update(&utm, sizeof(utm));
+  unsigned long crc = crc32.finalize();
   // Write the data
-  EEPROM.put(eeTime, tm);
-  EEPROM.put(eeTime + sizeof(tm), ck);
+  EEPROM.put(eeTime, utm);
+  EEPROM.put(eeTime + sizeof(utm), crc);
 }
 
 /**
   Read the time from EEPROM, along with CRC32 and verify
 */
 unsigned long timeEERead() {
-  unsigned long tm, tc;
+  unsigned long utm, eck;
   // Read the data
-  EEPROM.get(eeTime, tm);
-  EEPROM.get(eeTime + sizeof(tm), tc);
+  EEPROM.get(eeTime, utm);
+  EEPROM.get(eeTime + sizeof(utm), eck);
   // Compute CRC32 checksum
-  CRC32 crc;
-  crc.update(&tm, sizeof(tm));
-  unsigned long ck = crc.finalize();
+  CRC32 crc32;
+  crc32.update(&utm, sizeof(utm));
+  unsigned long crc = crc32.finalize();
   // Verify
-  if (tc == ck) return tm;
-  else          return 0UL;
+  if (eck == crc) return utm;
+  else            return 0UL;
 }
 
 /**
@@ -230,33 +232,33 @@ unsigned long timeUNIX(bool sync = true) {
   // Check if we need to sync
   if (millis() >= timeNextSync and sync) {
     // Try to get the time from Internet
-    unsigned long tm = timeSync();
-    if (tm == 0) {
+    unsigned long utm = timeSync();
+    if (utm == 0) {
       // Time sync has failed, sync again over one minute
       timeNextSync += 1UL * 60 * 1000;
       timeOk = false;
       // Try to get old time from eeprom, if time delta is zero
       if (timeDelta == 0) {
         // Compute an approximate time delta, if time is valid
-        tm = timeEERead();
-        if (tm != 0) {
-          timeDelta = tm - (millis() / 1000);
+        utm = timeEERead();
+        if (utm != 0) {
+          timeDelta = utm - (millis() / 1000);
           Serial.print(F("Time sync error, using EEPROM: 0x"));
-          Serial.println(tm, 16);
+          Serial.println(utm, 16);
         }
         else Serial.println(F("Time sync error, invalid EEPROM"));
       }
     }
     else {
       // Compute the new time delta
-      timeDelta = tm - (millis() / 1000);
+      timeDelta = utm - (millis() / 1000);
       // Time sync has succeeded, sync again in 8 hours
       timeNextSync += 8UL * 60 * 60 * 1000;
       timeOk = true;
       // Store this known time
-      timeEEWrite(tm);
+      timeEEWrite(utm);
       Serial.print(F("Network UNIX Time: 0x"));
-      Serial.println(tm, 16);
+      Serial.println(utm, 16);
     }
   }
 
@@ -417,7 +419,7 @@ void aprsSendTelemetry(int a0, int a1, int rssi, int vcc, int temp, byte bits) {
   // Increment the telemetry sequence number, reset it if exceeds 999
   if (++aprsTlmSeq > 999) aprsTlmSeq = 0;
   // Send the telemetry setup on power up (first minutes) or if the sequence number is 0
-  if ((aprsTlmSeq == 0) or (millis() < snsDelay + snsDelay)) aprsSendTelemetrySetup();
+  if ((aprsTlmSeq == 0) or (millis() < snsDelayBfr)) aprsSendTelemetrySetup();
   // Compose the APRS packet
   strcpy_P(aprsPkt, aprsCallSign);
   strcat_P(aprsPkt, aprsPath);
@@ -774,12 +776,21 @@ void loop() {
   // Read the sensors
   if (millis() >= snsNextTime) {
     // Count to check if we need to send the APRS data
-    if (++aprsMsrmCount > aprsMsrmMax) aprsMsrmCount = 1;
+    if (++aprsMsrmCount >= aprsMsrmMax) {
+      // Restart the counter
+      aprsMsrmCount = 0;
+      // Repeat sensor reading after the 'before' delay (long)
+      snsNextTime += snsDelayBfr;
+    }
+    else {
+      // Repeat sensor reading after the 'between' delay (short)
+      snsNextTime += snsDelayBtw;
+    }
     // Set the telemetry bit 7 if the station is being probed
     if (PROBE) aprsTlmBits = B10000000;
 
     // Check the time and set the telemetry bit 2 if time is not accurate
-    unsigned long tm = timeUNIX();
+    unsigned long utm = timeUNIX();
     if (!timeOk) aprsTlmBits |= B00000100;
 
     // Read BMP280
@@ -832,7 +843,7 @@ void loop() {
 
     // APRS (after the first 3600/(aprsMsrmMax*aprsRprtHour) seconds,
     //       then every 60/aprsRprtHour minutes)
-    if (aprsMsrmCount == 1) {
+    if (aprsMsrmCount == 0) {
       // Wake up the modem, if sleeping
       modemSleep(false);
       // Get RSSI (will get FALSE (0) if the modem is not working)
@@ -846,7 +857,7 @@ void loop() {
           // Authentication
           aprsAuthenticate();
           // Send the position, altitude and comment in firsts minutes after boot
-          if (millis() < snsDelay + snsDelay) aprsSendPosition();
+          if (millis() < snsDelayBfr) aprsSendPosition();
           // Send weather data if the athmospheric sensor is present
           if (atmo_ok) aprsSendWeather(rMedOut(MD_TEMP), -1, rMedOut(MD_PRES), rMedOut(MD_SRAD));
           // Send the telemetry
@@ -868,8 +879,5 @@ void loop() {
       // Send the modem to sleep
       modemSleep(true);
     }
-
-    // Repeat sensor reading
-    snsNextTime += snsDelay;
   }
 }
