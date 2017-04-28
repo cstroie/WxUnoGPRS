@@ -25,12 +25,15 @@
 */
 
 // The DEBUG and DEVEL flag
-#define DEBUG
+//#define DEBUG
 #define DEVEL
 
 // Watchdog, sleep
 #include <avr/wdt.h>
 #include <avr/sleep.h>
+
+// Low power
+#include <LowPower.h>
 
 // EEPROM and CRC32
 #include <EEPROM.h>
@@ -47,7 +50,7 @@
 
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "2.2";
+const char VERSION[]  PROGMEM = "2.3";
 bool       PROBE              = true;       // True if the station is being probed
 
 // GPRS credentials
@@ -744,7 +747,7 @@ void setup() {
   }
   else {
 #ifdef DEBUG
-    Serial.println(F("Trying to power on the modem, then reset the MCU"));
+    Serial.println(F("Power on the modem, then reset the MCU"));
 #endif
     // Try to enble the modem
     modemOnOff(true);
@@ -880,4 +883,6 @@ void loop() {
       modemSleep(true);
     }
   }
+  // Try to rest a little
+  LowPower.idle(SLEEP_1S, ADC_OFF, TIMER2_ON, TIMER1_ON, TIMER0_ON, SPI_OFF, USART0_ON, TWI_OFF);
 }
