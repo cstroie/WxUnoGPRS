@@ -165,35 +165,6 @@ void rMedIn(int idx, int x) {
 }
 
 /**
-  Write the round median array to EEPROM, along with CRC32: 60 bytes = sizeof(int) * 4 * MD_ALL + 4 bytes
-*/
-void rMedEEWrite() {
-  // Compute CRC32 checksum
-  CRC32 crc32;
-  crc32.update(&rMed, sizeof(rMed));
-  unsigned long crc = crc32.finalize();
-  // Write the data
-  EEPROM.put(eeRMed, rMed);
-  EEPROM.put(eeRMed + sizeof(rMed), crc);
-}
-
-/**
-  Read the round median array from EEPROM, along with CRC32 and verify
-*/
-void rMedEERead() {
-  unsigned long eck;
-  // Read the data
-  EEPROM.get(eeRMed, rMed);
-  EEPROM.get(eeRMed + sizeof(rMed), eck);
-  // Compute CRC32 checksum
-  CRC32 crc32;
-  crc32.update(&rMed, sizeof(rMed));
-  unsigned long crc = crc32.finalize();
-  // Verify and zero it if check fails
-  if (crc != eck) memset(&rMed, 0, sizeof(rMed));
-}
-
-/**
   Write the time to EEPROM, along with CRC32: 8 bytes
 
   @param tm the time value to store
@@ -699,8 +670,6 @@ void linkFailed() {
     Serial.println(F("PPP link failed for the last reports, resetting all"));
     // If time is good, store it
     if (timeOk) timeEEWrite(timeUNIX(false));
-    // Store the round median array
-    rMedEEWrite();
     // Try to power off the modem (need 5s)
     GPRS_Modem.powerDown();
     // Reset the MCU (in 8s)
@@ -734,9 +703,6 @@ void setup() {
   print_P(VERSION);
   Serial.print(F(" "));
   Serial.println(__DATE__);
-
-  // Try to restore the round median array
-  rMedEERead();
 
   // Set GSM module baud rate
   SerialAT.begin(9600);
