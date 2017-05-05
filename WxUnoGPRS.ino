@@ -736,6 +736,9 @@ void setup() {
 
   // Send the modem to sleep
   modemSleep(true, true);
+
+  // Enable the watchdog
+  wdt_enable(WDTO_8S);
 }
 
 /**
@@ -849,6 +852,10 @@ void loop() {
       modemSleep(true);
     }
   }
+
   // Try to rest a little
-  LowPower.idle(SLEEP_1S, ADC_OFF, TIMER2_ON, TIMER1_ON, TIMER0_ON, SPI_OFF, USART0_ON, TWI_OFF);
+  //LowPower.idle(SLEEP_1S, ADC_OFF, TIMER2_ON, TIMER1_ON, TIMER0_ON, SPI_OFF, USART0_ON, TWI_OFF);
+
+  // Reset the watchdog
+  wdt_reset();
 }
