@@ -25,7 +25,7 @@
 */
 
 // The DEBUG and DEVEL flag
-//#define DEBUG
+#define DEBUG
 #define DEVEL
 
 // Watchdog, sleep
@@ -816,6 +816,8 @@ void loop() {
     // APRS (after the first 3600/(aprsMsrmMax*aprsRprtHour) seconds,
     //       then every 60/aprsRprtHour minutes)
     if (aprsMsrmCount == 0) {
+      // Reset the watchdog
+      wdt_reset();
       // Wake up the modem, if sleeping
       modemSleep(false);
       // Get RSSI (will get FALSE (0) if the modem is not working)
@@ -826,6 +828,8 @@ void loop() {
       if (GPRS_Modem.pppConnect_P(apn)) {
         // Connect to APRS server
         if (GPRS_Client.connect_P(aprsServer, aprsPort)) {
+          // Reset the watchdog
+          wdt_reset();
           // Authentication
           aprsAuthenticate();
           // Send the position, altitude and comment in firsts minutes after boot
