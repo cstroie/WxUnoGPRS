@@ -73,7 +73,7 @@ const char aprsCallSign[] PROGMEM = "FW0727";
 const char aprsPassCode[] PROGMEM = "-1";
 const char aprsPath[]     PROGMEM = ">APRS,TCPIP*:";
 const char aprsLocation[] PROGMEM = "4455.29N/02527.08E_";
-const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Soil,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,BAT,TM,B7,B8";
+const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Soil,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,BAT,TM,RB,B8";
 const char aprsTlmEQNS[]  PROGMEM = ":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100";
 const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,low,err,N/A,N/A";
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10011111, ";
@@ -328,6 +328,9 @@ void aprsAuthenticate() {
 /**
   Send APRS weather data, then try to get the forecast
   FW0690>APRS,TCPIP*:@152457h4427.67N/02608.03E_.../...g...t044h86b10201L001WxUnoGPRS
+  #ifdef DEBUG
+  Serial.print(pkt);
+  #endif
 
   @param temp temperature
   @param hmdt humidity
@@ -392,8 +395,8 @@ void aprsSendWeather(int temp, int hmdt, int pres, int lux) {
 void aprsSendTelemetry(int a0, int a1, int rssi, int vcc, int temp, byte bits) {
   // Increment the telemetry sequence number, reset it if exceeds 999
   if (++aprsTlmSeq > 999) aprsTlmSeq = 0;
-  // Send the telemetry setup on power up (first minutes) or if the sequence number is 0
-  if ((aprsTlmSeq == 0) or (millis() < snsDelayBfr)) aprsSendTelemetrySetup();
+  // Send the telemetry setup if the sequence number is 0
+  if (aprsTlmSeq == 0) aprsSendTelemetrySetup();
   // Compose the APRS packet
   strcpy_P(aprsPkt, aprsCallSign);
   strcat_P(aprsPkt, aprsPath);
@@ -764,6 +767,9 @@ void loop() {
     // Check the time and set the telemetry bit 2 if time is not accurate
     unsigned long utm = timeUNIX();
     if (!timeOk) aprsTlmBits |= B00000100;
+
+    // Set the telemetry bit 1 if the uptime is less than one day (recent reboot)
+    if (millis() < 86400000UL) aprsTlmBits |= B00000010;
 
     // Read BMP280
     float temp, pres;
