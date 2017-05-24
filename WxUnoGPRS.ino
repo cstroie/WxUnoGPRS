@@ -43,6 +43,7 @@
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
+#include <BH1750.h>
 
 // GPRS
 #include "M590Client.h"
@@ -50,13 +51,13 @@
 
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "2.3";
-bool       PROBE              = true;       // True if the station is being probed
+const char VERSION[]  PROGMEM = "3.0";
+bool       PROBE              = true;                   // True if the station is being probed
 
 // GPRS credentials
-const char apn[]  PROGMEM = "internet.simfony.net";  // GPRS access point
-const char user[] PROGMEM = "";                      // GPRS user name
-const char pass[] PROGMEM = "";                      // GPRS password
+const char apn[]  PROGMEM = "internet.simfony.net";     // GPRS access point
+const char user[] PROGMEM = "";                         // GPRS user name
+const char pass[] PROGMEM = "";                         // GPRS password
 
 // APRS parameters
 const char  aprsServer[] PROGMEM  = "cwop5.aprs.net";   // CWOP APRS-IS server address to connect to
@@ -126,6 +127,8 @@ const unsigned long snsDelayBtw = snsReadTime / aprsMsrmMax;              // Del
 unsigned long       snsNextTime = 0UL;                                    // Next time to read the sensors
 Adafruit_BMP280     atmo;                                                 // The athmospheric sensor
 bool                atmo_ok = false;                                      // The athmospheric sensor presence flag
+BH1750              light(0x23);                                          // The illuminance sensor
+bool                light_ok = false;                                     // The illuminance sensor presence flag
 
 // Function prototypes
 void modemSleep(bool enable, bool initial = false);
@@ -730,6 +733,11 @@ void setup() {
   if (atmo_ok) Serial.println(F("BMP280 sensor detected"));
   else         Serial.println(F("BMP280 sensor missing"));
 
+  // BH1750
+  light.begin(BH1750_CONTINUOUS_HIGH_RES_MODE);
+  uint16_t lux = light.readLightLevel();
+  light_ok = true;
+
   // Initialize the random number generator and set the APRS telemetry start sequence
   randomSeed(readMCUTemp() + timeUNIX(false) + GPRS_Modem.getRSSI() + readVcc() + millis());
   aprsTlmSeq = random(1000);
@@ -784,6 +792,18 @@ void loop() {
       rMedIn(MD_PRES, (int)(pres * altCorr / 10.0));  // Store directly sea level in dPa
     }
 
+    // Read BH1750, illuminance value in lux
+    uint16_t lux = light.readLightLevel();
+    // Calculate the solar radiation in W/m^2
+    // FIXME this is in cW/m^2
+    int solRad = (int)(lux * 0.79);
+    // Set the bit 5 to show the sensor is present (reverse) and there is any light
+    if (solRad > 0) aprsTlmBits |= B00100000;
+    // Set the bit 4 to show the sensor is saturated
+    if (solRad > 999) aprsTlmBits |= B00010000;
+    // Add to round median filter
+    rMedIn(MD_SRAD, solRad);
+
     // Read Vcc (mV) and add to the round median filter
     int vcc = readVcc();
     rMedIn(MD_VCC, vcc);
@@ -806,18 +826,6 @@ void loop() {
     // Vout=RawADC0*0.0048828125;
     // lux=(2500/Vout-500)/10;
     //int lux = 51150L / a0 - 50;
-
-    // Illuminance value in lux
-    long lux = 50L * (1024L - a0) / a0;
-    // Calculate the solar radiation in W/m^2
-    // FIXME this is in cW/m^2
-    int solRad = (int)(lux * 0.79);
-    // Set the bit 5 to show the sensor is present (reverse) and there is any light
-    if (solRad > 0) aprsTlmBits |= B00100000;
-    // Set the bit 4 to show the sensor is saturated
-    if (solRad > 999) aprsTlmBits |= B00010000;
-    // Add to round median filter
-    rMedIn(MD_SRAD, solRad);
 
     // APRS (after the first 3600/(aprsMsrmMax*aprsRprtHour) seconds,
     //       then every 60/aprsRprtHour minutes)
