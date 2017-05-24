@@ -45,7 +45,7 @@
 #include <Adafruit_BMP280.h>
 
 // GPRS
-#include <M590Client.h>
+#include "M590Client.h"
 #include <SoftwareSerial.h>
 
 // Device name and software version
