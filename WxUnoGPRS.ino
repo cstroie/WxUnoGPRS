@@ -51,7 +51,7 @@
 
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "3.0";
+const char VERSION[]  PROGMEM = "3.1";
 bool       PROBE              = true;                   // True if the station is being probed
 
 // GPRS credentials
@@ -88,6 +88,7 @@ const int     timePort              = 37;                      // Time server po
 unsigned long timeNextSync          = 0UL;                     // Next time to syncronize
 unsigned long timeDelta             = 0UL;                     // Difference between real time and internal clock
 bool          timeOk                = false;                   // Flag to know the time is accurate
+const int     timeZone              = 0;                       // Time zone
 const int     eeTime                = 0;                       // EEPROM address for storing last known good time
 
 // Reports and measurements
@@ -106,7 +107,7 @@ const int pinM590Tx      = 4;  // MCU TX
 const int pinM590Sleep   = 5;  // Modem low power control
 const int pinM590Power   = 6;  // Modem On/Off control
 
-// Modemm and connection client
+// Modem and connection client
 SoftwareSerial  SerialAT(pinM590Rx, pinM590Tx); // Software RS232 link to modem
 M590Drv         GPRS_Modem;                     // Modem driver
 M590Client      GPRS_Client(&GPRS_Modem);       // GPRS client
@@ -313,7 +314,7 @@ char aprsTime(char *buf, size_t len) {
 
 /**
   Send APRS authentication data
-  user FW0690 pass -1 vers WxUnoGPRS 0.2"
+  user FW0727 pass -1 vers WxUnoGPRS 3.1"
 */
 void aprsAuthenticate() {
   strcpy_P(aprsPkt, PSTR("user "));
@@ -539,7 +540,7 @@ int readAnalog(uint8_t pin) {
   The internal temperature has to be used with the internal reference of 1.1V.
   Channel 8 can not be selected with the analogRead function yet.
 
-  @return temperature in hundreds of degrees Celsius, *calibrated for my device*
+  @return temperature in hundredths of degrees Celsius, *calibrated for my device*
 */
 int readMCUTemp() {
   // Set the internal reference and mux.
@@ -606,12 +607,16 @@ int readVcc() {
   (c) Mircea Diaconescu http://web-engineering.info/node/29
 */
 void softReset(uint8_t prescaller) {
+  Serial.print(F("Reboot"));
   // Start watchdog with the provided prescaller
   wdt_enable(prescaller);
   // Wait for the prescaller time to expire
   // without sending the reset signal by using
   // the wdt_reset() method
-  while (true) {}
+  while (true) {
+    Serial.print(F("."));
+    delay(1000);
+  }
 }
 
 /**
@@ -689,11 +694,8 @@ void linkFailed() {
 void print_P(const char *str) {
   uint8_t val;
   do {
-    val = pgm_read_byte(str);
-    if (val) {
-      Serial.write(val);
-      str++;
-    }
+    val = pgm_read_byte(str++);
+    if (val) Serial.write(val);
   } while (val);
 }
 
@@ -738,9 +740,19 @@ void setup() {
   uint16_t lux = light.readLightLevel();
   light_ok = true;
 
+  // Hardware data
+  int hwTemp = readMCUTemp();
+  int hwVcc  = readVcc();
+  Serial.print(F("Temp: "));
+  Serial.println((float)hwTemp / 100, 2);
+  Serial.print(F("Vcc : "));
+  Serial.println((float)hwVcc / 1000, 3);
+
   // Initialize the random number generator and set the APRS telemetry start sequence
-  randomSeed(readMCUTemp() + timeUNIX(false) + GPRS_Modem.getRSSI() + readVcc() + millis());
+  randomSeed(hwTemp + timeUNIX(false) + GPRS_Modem.getRSSI() + hwVcc + millis());
   aprsTlmSeq = random(1000);
+  Serial.print(F("TLM : "));
+  Serial.println(aprsTlmSeq);
 
   // Start the sensor timer
   snsNextTime = millis();
@@ -838,7 +850,6 @@ void loop() {
       int rssi = GPRS_Modem.getRSSI();
       if (rssi) rMedIn(MD_RSSI, -rssi);
       // Try to establish the PPP link, restart if it failed the last two reports
-      // TODO store to flash last measurements
       if (GPRS_Modem.pppConnect_P(apn)) {
         // Connect to APRS server
         if (GPRS_Client.connect_P(aprsServer, aprsPort)) {
