@@ -129,10 +129,15 @@ const unsigned long snsReadTime = 30UL * 1000UL;                          // Tot
 const unsigned long snsDelayBfr = 3600000UL / aprsRprtHour - snsReadTime; // Delay before sensor readings
 const unsigned long snsDelayBtw = snsReadTime / aprsMsrmMax;              // Delay between sensor readings
 unsigned long       snsNextTime = 0UL;                                    // Next time to read the sensors
+// BMP280
+const byte          atmoAddr    = 0x76;                                   // The athmospheric sensor I2C address
 Adafruit_BMP280     atmo;                                                 // The athmospheric sensor
 bool                atmo_ok     = false;                                  // The athmospheric sensor presence flag
-BH1750              light(0x23);                                          // The illuminance sensor
+// BH1750
+const byte          lightAddr   = 0x23;                                   // The illuminance sensor I2C address
+BH1750              light(lightAddr);                                     // The illuminance sensor
 bool                light_ok    = false;                                  // The illuminance sensor presence flag
+// DHT11
 SimpleDHT11         dht;                                                  // The DHT11 temperature/humidity sensor
 bool                dht_ok      = false;                                  // The temperature/humidity sensor presence flag
 const int           pinDHT      = 6;                                      // Temperature/humidity sensor input pin
@@ -777,9 +782,14 @@ void setup() {
   else        Serial.println(F("DHT11 sensor missing"));
 
   // BH1750
-  light.begin(BH1750_CONTINUOUS_HIGH_RES_MODE);
-  uint16_t lux = light.readLightLevel();
-  light_ok = true;
+  Wire.beginTransmission(lightAddr);
+  light_ok = Wire.endTransmission() == 0;
+  if (light_ok) {
+    light.begin(BH1750_CONTINUOUS_HIGH_RES_MODE);
+    Serial.println(F("BH1750 sensor detected"));
+  }
+  else
+    Serial.println(F("BH1750 sensor missing"));
 
   // Hardware data
   int hwTemp = readMCUTemp();
