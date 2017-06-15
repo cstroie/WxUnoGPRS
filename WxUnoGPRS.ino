@@ -54,7 +54,7 @@
 
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "3.1";
+const char VERSION[]  PROGMEM = "3.2";
 bool       PROBE              = true;                   // True if the station is being probed
 
 // GPRS credentials
@@ -778,8 +778,8 @@ void setup() {
 
   // DHT11
   dht_ok = dht.read(pinDHT, NULL, NULL, NULL) == 0;
-  if (dht_ok) Serial.println(F("DHT11 sensor detected"));
-  else        Serial.println(F("DHT11 sensor missing"));
+  if (dht_ok) Serial.println(F("DHT11  sensor detected"));
+  else        Serial.println(F("DHT11  sensor missing"));
 
   // BH1750
   Wire.beginTransmission(lightAddr);
@@ -879,7 +879,7 @@ void loop() {
       // Read BH1750, illuminance value in lux
       uint16_t lux = light.readLightLevel();
       // Calculate the solar radiation in W/m^2
-      int solRad = (int)(lux * 0.0079);
+      int solRad = (int)(lux * 0.79);                 // FIXME
       // Set the bit 4 to show the sensor is saturated
       if (solRad > 999) aprsTlmBits |= B00010000;
       // Add to round median filter
