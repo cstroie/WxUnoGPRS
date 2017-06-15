@@ -45,6 +45,9 @@
 #include <Adafruit_BMP280.h>
 #include <BH1750.h>
 
+// DHT11 sensor
+#include <SimpleDHT.h>
+
 // GPRS
 #include "M590Client.h"
 #include <SoftwareSerial.h>
@@ -74,9 +77,9 @@ const char aprsCallSign[] PROGMEM = "FW0727";
 const char aprsPassCode[] PROGMEM = "-1";
 const char aprsPath[]     PROGMEM = ">APRS,TCPIP*:";
 const char aprsLocation[] PROGMEM = "4455.29N/02527.08E_";
-const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Soil,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,BAT,TM,RB,B8";
+const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Soil,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,VCC,HT,RB,TM";
 const char aprsTlmEQNS[]  PROGMEM = ":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100";
-const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,low,err,N/A,N/A";
+const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,bad,ht,rb,er";
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10011111, ";
 const char eol[]          PROGMEM = "\r\n";
 
@@ -117,7 +120,7 @@ unsigned long   linkLastTime = 0UL;             // Last time the modem and tcp c
 EMPTY_INTERRUPT(ADC_vect);
 
 // Statistics (round median filter for the last 3 values)
-enum      rMedIdx {MD_TEMP, MD_PRES, MD_RSSI, MD_SRAD, MD_VCC, MD_A0, MD_A1, MD_ALL};
+enum      rMedIdx {MD_TEMP, MD_HMDT, MD_PRES, MD_SRAD, MD_RSSI, MD_VCC, MD_MCU, MD_A0, MD_A1, MD_ALL};
 int       rMed[MD_ALL][4];
 const int eeRMed = 16; // EEPROM address for storing the round median array
 
@@ -127,9 +130,12 @@ const unsigned long snsDelayBfr = 3600000UL / aprsRprtHour - snsReadTime; // Del
 const unsigned long snsDelayBtw = snsReadTime / aprsMsrmMax;              // Delay between sensor readings
 unsigned long       snsNextTime = 0UL;                                    // Next time to read the sensors
 Adafruit_BMP280     atmo;                                                 // The athmospheric sensor
-bool                atmo_ok = false;                                      // The athmospheric sensor presence flag
+bool                atmo_ok     = false;                                  // The athmospheric sensor presence flag
 BH1750              light(0x23);                                          // The illuminance sensor
-bool                light_ok = false;                                     // The illuminance sensor presence flag
+bool                light_ok    = false;                                  // The illuminance sensor presence flag
+SimpleDHT11         dht;                                                  // The DHT11 temperature/humidity sensor
+bool                dht_ok      = false;                                  // The temperature/humidity sensor presence flag
+const int           pinDHT      = 6;                                      // Temperature/humidity sensor input pin
 
 // Function prototypes
 void modemSleep(bool enable, bool initial = false);
@@ -166,6 +172,36 @@ void rMedIn(int idx, int x) {
   rMed[idx][1] = rMed[idx][2];
   rMed[idx][2] = rMed[idx][3];
   rMed[idx][3] = x;
+}
+
+/**
+  Read the DHT11 sensor
+
+  @param temp temperature
+  @param hmdt humidity
+  @return success
+*/
+bool dhtRead(int* temp, int* hmdt) {
+  byte t = 0, h = 0;
+  bool ok = false;
+  // First read
+  if (dht.read(pinDHT, NULL, NULL, NULL) == 0) {
+    // Wait a bit and read again
+    delay(2000);
+    // Second read
+    if (dht.read(pinDHT, &t, &h, NULL) == 0) {
+      if (temp) *temp = (int)t;
+      if (hmdt) *hmdt = (int)h;
+      ok = true;
+#ifdef DEBUG
+      Serial.print(F("DHT11 T: "));
+      Serial.println(t);
+      Serial.print(F("DHT11 H: "));
+      Serial.println(h);
+#endif
+    }
+  }
+  return ok;
 }
 
 /**
@@ -735,6 +771,11 @@ void setup() {
   if (atmo_ok) Serial.println(F("BMP280 sensor detected"));
   else         Serial.println(F("BMP280 sensor missing"));
 
+  // DHT11
+  dht_ok = dht.read(pinDHT, NULL, NULL, NULL) == 0;
+  if (dht_ok) Serial.println(F("DHT11 sensor detected"));
+  else        Serial.println(F("DHT11 sensor missing"));
+
   // BH1750
   light.begin(BH1750_CONTINUOUS_HIGH_RES_MODE);
   uint16_t lux = light.readLightLevel();
@@ -784,13 +825,16 @@ void loop() {
     // Set the telemetry bit 7 if the station is being probed
     if (PROBE) aprsTlmBits = B10000000;
 
-    // Check the time and set the telemetry bit 2 if time is not accurate
+    // Reset the watchdog
+    wdt_reset();
+    // Check the time and set the telemetry bit 0 if time is not accurate
     unsigned long utm = timeUNIX();
-    if (!timeOk) aprsTlmBits |= B00000100;
-
+    if (!timeOk) aprsTlmBits |= B00000001;
     // Set the telemetry bit 1 if the uptime is less than one day (recent reboot)
     if (millis() < 86400000UL) aprsTlmBits |= B00000010;
 
+    // Reset the watchdog
+    wdt_reset();
     // Read BMP280
     float temp, pres;
     if (atmo_ok) {
@@ -804,11 +848,21 @@ void loop() {
       rMedIn(MD_PRES, (int)(pres * altCorr / 10.0));  // Store directly sea level in dPa
     }
 
+    // Reset the watchdog
+    wdt_reset();
+    // Read DHT11
+    int dhtTemp = 0, dhtHmdt = 0;
+    if (dht_ok) {
+      if (dhtRead(&dhtTemp, &dhtHmdt)) rMedIn(MD_HMDT, (int)dhtHmdt);
+    }
+    else rMedIn(MD_HMDT, -1);                         // Store an invalid value if no sensor
+
+    // Reset the watchdog
+    wdt_reset();
     // Read BH1750, illuminance value in lux
     uint16_t lux = light.readLightLevel();
     // Calculate the solar radiation in W/m^2
-    // FIXME this is in cW/m^2
-    int solRad = (int)(lux * 0.79);
+    int solRad = (int)(lux * 0.0079);
     // Set the bit 5 to show the sensor is present (reverse) and there is any light
     if (solRad > 0) aprsTlmBits |= B00100000;
     // Set the bit 4 to show the sensor is saturated
@@ -816,18 +870,24 @@ void loop() {
     // Add to round median filter
     rMedIn(MD_SRAD, solRad);
 
-    // Read Vcc (mV) and add to the round median filter
+    // Reset the watchdog
+    wdt_reset();
+    // Read the Vcc (mV) and add to the round median filter
     int vcc = readVcc();
     rMedIn(MD_VCC, vcc);
-    if (vcc < 4750 or vcc > 5250) {
-      // Set the bit 3 to show the USB voltage is wrong (5V +/- 5%)
-      aprsTlmBits |= B00001000;
-    }
+    // Set the bit 3 to show whether the USB voltage is wrong (5V +/- 5%)
+    if (vcc < 4750 or vcc > 5250) aprsTlmBits |= B00001000;
+    // Read the MCU temperature (cC) and add to the round median filter
+    int mct = readMCUTemp();
+    rMedIn(MD_MCU, mct);
+    // Set the bit 2 to show whether the MCU is running hot (over 50'C)
+    if (mct > 5000) aprsTlmBits |= B00000100;
 
+    // Reset the watchdog
+    wdt_reset();
     // Various analog telemetry
     int a0 = readAnalog(A0);
     int a1 = readAnalog(A1);
-
     // Add to round median filter, mV (a / 1024 * Vcc)
     rMedIn(MD_A0, (vcc * (unsigned long)a0) / 1024);
     rMedIn(MD_A1, (vcc * (unsigned long)a1) / 1024);
@@ -860,13 +920,13 @@ void loop() {
           // Send the position, altitude and comment in firsts minutes after boot
           if (millis() < snsDelayBfr) aprsSendPosition();
           // Send weather data if the athmospheric sensor is present
-          if (atmo_ok) aprsSendWeather(rMedOut(MD_TEMP), -1, rMedOut(MD_PRES), rMedOut(MD_SRAD));
+          if (atmo_ok) aprsSendWeather(rMedOut(MD_TEMP), rMedOut(MD_HMDT), rMedOut(MD_PRES), rMedOut(MD_SRAD));
           // Send the telemetry
           aprsSendTelemetry(rMedOut(MD_A0) / 20,
                             rMedOut(MD_A1) / 20,
                             rMedOut(MD_RSSI),
-                            (rMedOut(MD_VCC) - 4500) / 4,
-                            readMCUTemp() / 100 + 100,
+                            rMedOut(MD_VCC) / 4 - 1125,
+                            rMedOut(MD_MCU) / 100 + 100,
                             aprsTlmBits);
           //aprsSendStatus("Fine weather");
           // Close the connection
