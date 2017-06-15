@@ -846,8 +846,8 @@ void loop() {
     // Reset the watchdog
     wdt_reset();
     // Read BMP280
-    float temp, pres;
     if (atmo_ok) {
+      float temp, pres;
       // Set the bit 5 to show the sensor is present (reverse)
       aprsTlmBits |= B01000000;
       // Get the weather parameters
@@ -857,28 +857,35 @@ void loop() {
       rMedIn(MD_TEMP, (int)(temp * 9 / 5 + 32));      // Store directly integer Fahrenheit
       rMedIn(MD_PRES, (int)(pres * altCorr / 10.0));  // Store directly sea level in dPa
     }
+    else {
+      rMedIn(MD_TEMP, -1);                            // Store an invalid value if no sensor
+      rMedIn(MD_PRES, -1);                            // Store an invalid value if no sensor
+    }
 
     // Reset the watchdog
     wdt_reset();
     // Read DHT11
-    int dhtTemp = 0, dhtHmdt = 0;
     if (dht_ok) {
+      int dhtTemp = 0, dhtHmdt = 0;
       if (dhtRead(&dhtTemp, &dhtHmdt)) rMedIn(MD_HMDT, (int)dhtHmdt);
     }
     else rMedIn(MD_HMDT, -1);                         // Store an invalid value if no sensor
 
     // Reset the watchdog
     wdt_reset();
-    // Read BH1750, illuminance value in lux
-    uint16_t lux = light.readLightLevel();
-    // Calculate the solar radiation in W/m^2
-    int solRad = (int)(lux * 0.0079);
-    // Set the bit 5 to show the sensor is present (reverse) and there is any light
-    if (solRad > 0) aprsTlmBits |= B00100000;
-    // Set the bit 4 to show the sensor is saturated
-    if (solRad > 999) aprsTlmBits |= B00010000;
-    // Add to round median filter
-    rMedIn(MD_SRAD, solRad);
+    if (light_ok) {
+      // Set the bit 5 to show the sensor is present (reverse)
+      aprsTlmBits |= B00100000;
+      // Read BH1750, illuminance value in lux
+      uint16_t lux = light.readLightLevel();
+      // Calculate the solar radiation in W/m^2
+      int solRad = (int)(lux * 0.0079);
+      // Set the bit 4 to show the sensor is saturated
+      if (solRad > 999) aprsTlmBits |= B00010000;
+      // Add to round median filter
+      rMedIn(MD_SRAD, solRad);
+    }
+    else rMedIn(MD_SRAD, -1);                         // Store an invalid value if no sensor
 
     // Reset the watchdog
     wdt_reset();
@@ -929,8 +936,8 @@ void loop() {
           aprsAuthenticate();
           // Send the position, altitude and comment in firsts minutes after boot
           if (millis() < snsDelayBfr) aprsSendPosition();
-          // Send weather data if the athmospheric sensor is present
-          if (atmo_ok) aprsSendWeather(rMedOut(MD_TEMP), rMedOut(MD_HMDT), rMedOut(MD_PRES), rMedOut(MD_SRAD));
+          // Send weather data
+          aprsSendWeather(rMedOut(MD_TEMP), rMedOut(MD_HMDT), rMedOut(MD_PRES), rMedOut(MD_SRAD));
           // Send the telemetry
           aprsSendTelemetry(rMedOut(MD_A0) / 20,
                             rMedOut(MD_A1) / 20,
