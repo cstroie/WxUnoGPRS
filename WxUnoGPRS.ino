@@ -140,7 +140,7 @@ bool                light_ok    = false;                                  // The
 // DHT11
 SimpleDHT11         dht;                                                  // The DHT11 temperature/humidity sensor
 bool                dht_ok      = false;                                  // The temperature/humidity sensor presence flag
-const int           pinDHT      = 6;                                      // Temperature/humidity sensor input pin
+const int           pinDHT      = 16;                                     // Temperature/humidity sensor input pin
 
 // Function prototypes
 void modemSleep(bool enable, bool initial = false);
