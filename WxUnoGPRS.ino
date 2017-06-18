@@ -879,7 +879,7 @@ void loop() {
       // Read BH1750, illuminance value in lux
       uint16_t lux = light.readLightLevel();
       // Calculate the solar radiation in W/m^2
-      int solRad = (int)(lux * 0.79);                 // FIXME
+      int solRad = (int)(lux * 0.0079);
       // Set the bit 4 to show the sensor is saturated
       if (solRad > 999) aprsTlmBits |= B00010000;
       // Add to round median filter
