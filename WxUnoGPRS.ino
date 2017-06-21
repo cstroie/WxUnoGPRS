@@ -54,7 +54,7 @@
 
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "3.2";
+const char VERSION[]  PROGMEM = "3.3";
 bool       PROBE              = true;                   // True if the station is being probed
 
 // GPRS credentials
@@ -80,7 +80,7 @@ const char aprsLocation[] PROGMEM = "4455.29N/02527.08E_";
 const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Soil,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,VCC,HT,RB,TM";
 const char aprsTlmEQNS[]  PROGMEM = ":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100";
 const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,bad,ht,rb,er";
-const char aprsTlmBITS[]  PROGMEM = ":BITS.10011111, ";
+const char aprsTlmBITS[]  PROGMEM = ":BITS.10001111, ";
 const char eol[]          PROGMEM = "\r\n";
 
 char       aprsPkt[100]           = "";     // The APRS packet buffer, largest packet is 82 for v2.1
@@ -867,6 +867,9 @@ void loop() {
     // Read DHT11
     if (dht_ok) {
       int dhtTemp = 0, dhtHmdt = 0;
+      // Set the bit 4 to show the sensor is present (reverse)
+      aprsTlmBits |= B00010000;
+      // Get the temperature / humidity
       if (dhtRead(&dhtTemp, &dhtHmdt)) rMedIn(MD_HMDT, (int)dhtHmdt);
     }
     else rMedIn(MD_HMDT, -1);                         // Store an invalid value if no sensor
@@ -880,8 +883,8 @@ void loop() {
       uint16_t lux = light.readLightLevel();
       // Calculate the solar radiation in W/m^2
       int solRad = (int)(lux * 0.0079);
-      // Set the bit 4 to show the sensor is saturated
-      if (solRad > 999) aprsTlmBits |= B00010000;
+      // If the sensor is saturated, limit the reading to maximum value
+      if (solRad > 999) solRad = 999;
       // Add to round median filter
       rMedIn(MD_SRAD, solRad);
     }
