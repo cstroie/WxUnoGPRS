@@ -52,9 +52,12 @@
 #include "M590Client.h"
 #include <SoftwareSerial.h>
 
+// Signal filtering
+#include "FIR.h"
+
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "3.2";
+const char VERSION[]  PROGMEM = "3.2-FIR";
 bool       PROBE              = true;                   // True if the station is being probed
 
 // GPRS credentials
@@ -96,7 +99,7 @@ const int     eeTime                = 0;                       // EEPROM address
 
 // Reports and measurements
 const int aprsRprtHour   = 10; // Number of APRS reports per hour
-const int aprsMsrmMax    = 3;  // Number of measurements per report (keep even)
+const int aprsMsrmMax    = 12; // Number of measurements per report (keep even)
 int       aprsMsrmCount  = 0;  // Measurements counter
 int       aprsTlmSeq     = 0;  // Telemetry sequence mumber
 
@@ -119,13 +122,15 @@ unsigned long   linkLastTime = 0UL;             // Last time the modem and tcp c
 // When ADC completed, take an interrupt
 EMPTY_INTERRUPT(ADC_vect);
 
-// Statistics (round median filter for the last 3 values)
-enum      rMedIdx {MD_TEMP, MD_HMDT, MD_PRES, MD_SRAD, MD_RSSI, MD_VCC, MD_MCU, MD_A0, MD_A1, MD_ALL};
-int       rMed[MD_ALL][4];
+// FIR signal filter
+#define FILTERTAPS 5
+enum      firIdx {MD_TEMP, MD_HMDT, MD_PRES, MD_SRAD, MD_RSSI, MD_VCC, MD_MCU, MD_A0, MD_A1, MD_ALL};
+FIR       firIn[MD_ALL];
+float     firOut[MD_ALL];
 const int eeRMed = 16; // EEPROM address for storing the round median array
 
 // Sensors
-const unsigned long snsReadTime = 30UL * 1000UL;                          // Total time to read sensors, repeatedly, for aprsMsrmMax times
+const unsigned long snsReadTime = 300UL * 1000UL;                         // Total time to read sensors, repeatedly, for aprsMsrmMax times
 const unsigned long snsDelayBfr = 3600000UL / aprsRprtHour - snsReadTime; // Delay before sensor readings
 const unsigned long snsDelayBtw = snsReadTime / aprsMsrmMax;              // Delay between sensor readings
 unsigned long       snsNextTime = 0UL;                                    // Next time to read the sensors
@@ -144,40 +149,6 @@ const int           pinDHT      = 16;                                     // Tem
 
 // Function prototypes
 void modemSleep(bool enable, bool initial = false);
-
-/**
-  Simple median filter: get the median
-  2014-03-25: started by David Cary
-
-  @param idx the index in round median array
-  @return the median
-*/
-int rMedOut(int idx) {
-  // Return the last value if the buffer is not full yet
-  if (rMed[idx][0] < 3) return rMed[idx][3];
-  else {
-    // Get the maximum and the minimum
-    int the_max = max(max(rMed[idx][1], rMed[idx][2]), rMed[idx][3]);
-    int the_min = min(min(rMed[idx][1], rMed[idx][2]), rMed[idx][3]);
-    // Clever code: XOR the max and min, remaining the middle
-    return the_max ^ the_min ^ rMed[idx][1] ^ rMed[idx][2] ^ rMed[idx][3];
-  }
-}
-
-/**
-  Simple median filter: add value to array
-
-  @param idx the index in round median array
-  @param x the value to add
-*/
-void rMedIn(int idx, int x) {
-  // At index 0 there is the number of values stored
-  if (rMed[idx][0] < 3) rMed[idx][0]++;
-  // Shift one position
-  rMed[idx][1] = rMed[idx][2];
-  rMed[idx][2] = rMed[idx][3];
-  rMed[idx][3] = x;
-}
 
 /**
   Read the DHT11 sensor
@@ -805,6 +776,13 @@ void setup() {
   Serial.print(F("TLM : "));
   Serial.println(aprsTlmSeq);
 
+  // Signal filter
+  float firTaps[FILTERTAPS] = {0.021, 0.096, 0.146, 0.096, 0.021};
+  for (int idx = 0; idx < MD_ALL; idx++) {
+    firIn[idx].setCoefficients(firTaps);
+    firIn[idx].setGain(0.38);
+  }
+
   // Start the sensor timer
   snsNextTime = millis();
 
@@ -854,12 +832,12 @@ void loop() {
       temp = atmo.readTemperature();
       pres = atmo.readPressure();
       // Add to the round median filter
-      rMedIn(MD_TEMP, (int)(temp * 9 / 5 + 32));      // Store directly integer Fahrenheit
-      rMedIn(MD_PRES, (int)(pres * altCorr / 10.0));  // Store directly sea level in dPa
+      firOut[MD_TEMP] = firIn[MD_TEMP].process(temp * 9 / 5 + 32);      // Store directly integer Fahrenheit
+      firOut[MD_PRES] = firIn[MD_PRES].process(pres * altCorr / 10.0);  // Store directly sea level in dPa
     }
     else {
-      rMedIn(MD_TEMP, -1);                            // Store an invalid value if no sensor
-      rMedIn(MD_PRES, -1);                            // Store an invalid value if no sensor
+      firOut[MD_TEMP] = firIn[MD_TEMP].process(-1);                            // Store an invalid value if no sensor
+      firOut[MD_PRES] = firIn[MD_PRES].process(-1);                            // Store an invalid value if no sensor
     }
 
     // Reset the watchdog
@@ -867,9 +845,9 @@ void loop() {
     // Read DHT11
     if (dht_ok) {
       int dhtTemp = 0, dhtHmdt = 0;
-      if (dhtRead(&dhtTemp, &dhtHmdt)) rMedIn(MD_HMDT, (int)dhtHmdt);
+      if (dhtRead(&dhtTemp, &dhtHmdt)) firOut[MD_HMDT] = firIn[MD_HMDT].process(dhtHmdt);
     }
-    else rMedIn(MD_HMDT, -1);                         // Store an invalid value if no sensor
+    else firOut[MD_HMDT] = firIn[MD_HMDT].process(-1);                         // Store an invalid value if no sensor
 
     // Reset the watchdog
     wdt_reset();
@@ -883,20 +861,20 @@ void loop() {
       // Set the bit 4 to show the sensor is saturated
       if (solRad > 999) aprsTlmBits |= B00010000;
       // Add to round median filter
-      rMedIn(MD_SRAD, solRad);
+      firOut[MD_SRAD] = firIn[MD_SRAD].process(solRad);
     }
-    else rMedIn(MD_SRAD, -1);                         // Store an invalid value if no sensor
+    else firOut[MD_SRAD] = firIn[MD_SRAD].process(-1);                         // Store an invalid value if no sensor
 
     // Reset the watchdog
     wdt_reset();
     // Read the Vcc (mV) and add to the round median filter
     int vcc = readVcc();
-    rMedIn(MD_VCC, vcc);
+    firOut[MD_VCC] = firIn[MD_VCC].process(vcc);
     // Set the bit 3 to show whether the USB voltage is wrong (5V +/- 5%)
     if (vcc < 4750 or vcc > 5250) aprsTlmBits |= B00001000;
     // Read the MCU temperature (cC) and add to the round median filter
     int mct = readMCUTemp();
-    rMedIn(MD_MCU, mct);
+    firOut[MD_MCU] = firIn[MD_MCU].process(mct);
     // Set the bit 2 to show whether the MCU is running hot (over 50'C)
     if (mct > 5000) aprsTlmBits |= B00000100;
 
@@ -906,8 +884,8 @@ void loop() {
     int a0 = readAnalog(A0);
     int a1 = readAnalog(A1);
     // Add to round median filter, mV (a / 1024 * Vcc)
-    rMedIn(MD_A0, (vcc * (unsigned long)a0) / 1024);
-    rMedIn(MD_A1, (vcc * (unsigned long)a1) / 1024);
+    firOut[MD_A0] = firIn[MD_A0].process(vcc * (unsigned long)a0 / 1024);
+    firOut[MD_A1] = firIn[MD_A1].process(vcc * (unsigned long)a1 / 1024);
 
     // Upper part
     // 500 / R(kO); R = R0(1024 / x - 1)
@@ -925,7 +903,7 @@ void loop() {
       modemSleep(false);
       // Get RSSI (will get FALSE (0) if the modem is not working)
       int rssi = GPRS_Modem.getRSSI();
-      if (rssi) rMedIn(MD_RSSI, -rssi);
+      if (rssi) firOut[MD_RSSI] = firIn[MD_RSSI].process(-rssi);
       // Try to establish the PPP link, restart if it failed the last two reports
       if (GPRS_Modem.pppConnect_P(apn)) {
         // Connect to APRS server
@@ -937,13 +915,13 @@ void loop() {
           // Send the position, altitude and comment in firsts minutes after boot
           if (millis() < snsDelayBfr) aprsSendPosition();
           // Send weather data
-          aprsSendWeather(rMedOut(MD_TEMP), rMedOut(MD_HMDT), rMedOut(MD_PRES), rMedOut(MD_SRAD));
+          aprsSendWeather((int)(firOut[MD_TEMP]), (int)(firOut[MD_HMDT]), (int)(firOut[MD_PRES]), (int)(firOut[MD_SRAD]));
           // Send the telemetry
-          aprsSendTelemetry(rMedOut(MD_A0) / 20,
-                            rMedOut(MD_A1) / 20,
-                            rMedOut(MD_RSSI),
-                            rMedOut(MD_VCC) / 4 - 1125,
-                            rMedOut(MD_MCU) / 100 + 100,
+          aprsSendTelemetry((int)(firOut[MD_A0] / 20),
+                            (int)(firOut[MD_A1] / 20),
+                            (int)(firOut[MD_RSSI]),
+                            (int)(firOut[MD_VCC] / 4 - 1125),
+                            (int)(firOut[MD_MCU] / 100 + 100),
                             aprsTlmBits);
           //aprsSendStatus("Fine weather");
           // Close the connection
