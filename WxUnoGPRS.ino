@@ -120,7 +120,7 @@ unsigned long   linkLastTime = 0UL;             // Last time the modem and tcp c
 EMPTY_INTERRUPT(ADC_vect);
 
 // Statistics (round median filter for the last 3 values)
-enum      rMedIdx {MD_TEMP, MD_HMDT, MD_PRES, MD_SRAD, MD_RSSI, MD_VCC, MD_MCU, MD_A0, MD_A1, MD_ALL};
+enum      rMedIdx {MD_TEMP, MD_HMDT, MD_DHTT, MD_PRES, MD_SRAD, MD_RSSI, MD_VCC, MD_MCU, MD_A0, MD_A1, MD_ALL};
 int       rMed[MD_ALL][4];
 const int eeRMed = 16; // EEPROM address for storing the round median array
 
@@ -679,7 +679,7 @@ void modemOnOff(bool initial = false) {
 }
 
 /**
-  Power on/off the M590 modem
+  Low power for the M590 modem
 
   @param enable enable or disable the low power mode
   @param initial configure the MCU control pin, initially
@@ -870,9 +870,15 @@ void loop() {
       // Set the bit 4 to show the sensor is present (reverse)
       aprsTlmBits |= B00010000;
       // Get the temperature / humidity
-      if (dhtRead(&dhtTemp, &dhtHmdt)) rMedIn(MD_HMDT, (int)dhtHmdt);
+      if (dhtRead(&dhtTemp, &dhtHmdt)) {
+        rMedIn(MD_HMDT, (int)dhtHmdt);
+        rMedIn(MD_DHTT, (int)dhtTemp);
+      }
     }
-    else rMedIn(MD_HMDT, -1);                         // Store an invalid value if no sensor
+    else {
+      rMedIn(MD_HMDT, -1);                         // Store an invalid value if no sensor
+      rMedIn(MD_DHTT, -1);                         // Store an invalid value if no sensor
+    }
 
     // Reset the watchdog
     wdt_reset();
@@ -943,7 +949,7 @@ void loop() {
           aprsSendWeather(rMedOut(MD_TEMP), rMedOut(MD_HMDT), rMedOut(MD_PRES), rMedOut(MD_SRAD));
           // Send the telemetry
           aprsSendTelemetry(rMedOut(MD_A0) / 20,
-                            rMedOut(MD_A1) / 20,
+                            rMedOut(MD_DHTT),
                             rMedOut(MD_RSSI),
                             rMedOut(MD_VCC) / 4 - 1125,
                             rMedOut(MD_MCU) / 100 + 100,
