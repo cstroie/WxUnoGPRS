@@ -77,9 +77,9 @@ const char aprsCallSign[] PROGMEM = "FW0727";
 const char aprsPassCode[] PROGMEM = "-1";
 const char aprsPath[]     PROGMEM = ">APRS,TCPIP*:";
 const char aprsLocation[] PROGMEM = "4455.29N/02527.08E_";
-const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Soil,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,SAT,VCC,HT,RB,TM";
+const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Soil,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,DHT,VCC,HT,RB,TM";
 const char aprsTlmEQNS[]  PROGMEM = ":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100";
-const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,sat,bad,ht,rb,er";
+const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,on,bad,ht,rb,er";
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10001111, ";
 const char eol[]          PROGMEM = "\r\n";
 
