@@ -177,6 +177,12 @@ void rMedIn(int idx, int x) {
   rMed[idx][1] = rMed[idx][2];
   rMed[idx][2] = rMed[idx][3];
   rMed[idx][3] = x;
+#ifdef DEBUG
+  Serial.print(F("RMed "));
+  Serial.print(idx);
+  Serial.print(F(": "));
+  Serial.println(x);
+#endif
 }
 
 /**
@@ -198,12 +204,6 @@ bool dhtRead(int* temp, int* hmdt) {
       if (temp) *temp = (int)t;
       if (hmdt) *hmdt = (int)h;
       ok = true;
-#ifdef DEBUG
-      Serial.print(F("DHT11 T: "));
-      Serial.println(t);
-      Serial.print(F("DHT11 H: "));
-      Serial.println(h);
-#endif
     }
   }
   return ok;
@@ -834,6 +834,11 @@ void loop() {
     }
     // Set the telemetry bit 7 if the station is being probed
     if (PROBE) aprsTlmBits = B10000000;
+
+#ifdef DEBUG
+    Serial.print(F("Sensor reading "));
+    Serial.println(aprsMsrmCount);
+#endif
 
     // Reset the watchdog
     wdt_reset();
