@@ -26,7 +26,7 @@
 
 // The DEBUG and DEVEL flag
 #define DEBUG
-#define DEVEL
+//#define DEVEL
 
 // Watchdog, sleep
 #include <avr/wdt.h>
@@ -54,7 +54,7 @@
 
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "3.3";
+const char VERSION[]  PROGMEM = "3.4";
 bool       PROBE              = true;                   // True if the station is being probed
 
 // GPRS credentials
@@ -77,9 +77,9 @@ const char aprsCallSign[] PROGMEM = "FW0727";
 const char aprsPassCode[] PROGMEM = "-1";
 const char aprsPath[]     PROGMEM = ">APRS,TCPIP*:";
 const char aprsLocation[] PROGMEM = "4455.29N/02527.08E_";
-const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,Soil,RSSI,Vcc,Tmp,PROBE,ATMO,LUX,DHT,VCC,HT,RB,TM";
-const char aprsTlmEQNS[]  PROGMEM = ":EQNS.0,20,0,0,20,0,0,-1,0,0,0.004,4.5,0,1,-100";
-const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,mV,dBm,V,C,prb,on,on,on,bad,ht,rb,er";
+const char aprsTlmPARM[]  PROGMEM = ":PARM.Light,DHTT,RSSI,Vcc,MCU,PROBE,ATMO,LUX,DHT,VCC,HT,RB,TM";
+const char aprsTlmEQNS[]  PROGMEM = ":EQNS.0,20,0,0,1,0,0,-1,0,0,0.004,4.5,0,1,-100";
+const char aprsTlmUNIT[]  PROGMEM = ":UNIT.mV,C,dBm,V,C,prb,on,on,on,bad,ht,rb,er";
 const char aprsTlmBITS[]  PROGMEM = ":BITS.10001111, ";
 const char eol[]          PROGMEM = "\r\n";
 
@@ -120,7 +120,7 @@ unsigned long   linkLastTime = 0UL;             // Last time the modem and tcp c
 EMPTY_INTERRUPT(ADC_vect);
 
 // Statistics (round median filter for the last 3 values)
-enum      rMedIdx {MD_TEMP, MD_HMDT, MD_DHTT, MD_PRES, MD_SRAD, MD_RSSI, MD_VCC, MD_MCU, MD_A0, MD_A1, MD_ALL};
+enum      rMedIdx {MD_TEMP, MD_HMDT, MD_DHTT, MD_PRES, MD_SRAD, MD_RSSI, MD_VCC, MD_MCU, MD_A0, MD_ALL};
 int       rMed[MD_ALL][4];
 const int eeRMed = 16; // EEPROM address for storing the round median array
 
@@ -530,11 +530,14 @@ void aprsSendPosition(const char *comment = NULL) {
   strcat_P(aprsPkt, aprsPath);
   strcat_P(aprsPkt, PSTR("!"));
   strcat_P(aprsPkt, aprsLocation);
-  strcat_P(aprsPkt, PSTR("/000/000/A="));
+  strcat_P(aprsPkt, PSTR("/A="));
   char buf[7];
   sprintf_P(buf, PSTR("%06d"), altFeet);
   strncat(aprsPkt, buf, sizeof(buf));
+  strcat_P(aprsPkt, PSTR(" "));
   if (comment != NULL) strcat(aprsPkt, comment);
+  else strcat_P(aprsPkt, NODENAME);
+  if (PROBE) strcat_P(aprsPkt, PSTR(" [PROBE]"));
   strcat_P(aprsPkt, eol);
   aprsSend(aprsPkt);
 }
@@ -921,7 +924,6 @@ void loop() {
     int a1 = readAnalog(A1);
     // Add to round median filter, mV (a / 1024 * Vcc)
     rMedIn(MD_A0, (vcc * (unsigned long)a0) / 1024);
-    rMedIn(MD_A1, (vcc * (unsigned long)a1) / 1024);
 
     // Upper part
     // 500 / R(kO); R = R0(1024 / x - 1)
