@@ -1,5 +1,5 @@
 /**
-  WxUnoGPRS - Weather Station for Arduino UNO, GPRS connected
+  WxUnoGPRS - Weather Beacon based on Arduino UNO, GPRS connected
 
   Copyright 2017 Costin STROIE <costinstroie@eridu.eu.org>
 
@@ -19,8 +19,8 @@
   WxUnoGPRS.  If not, see <http://www.gnu.org/licenses/>.
 
 
-  GPRS connected weather station, reading the temperature and athmospheric
-  pressure sensor BMP280, as well as internal temperature, supply voltage,
+  GPRS connected weather beacon, reading the temperature and athmospheric
+  pressure sensor BMP280, as well as internal MCU temperature, supply voltage,
   local illuminance, publishing the measured data to CWOP APRS.
 */
 
@@ -54,8 +54,9 @@
 
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "3.4";
+const char VERSION[]  PROGMEM = "3.5";
 bool       PROBE              = true;                   // True if the station is being probed
+const char DEVICEID[] PROGMEM = "tAUG3";                // t_hing A_rduino U_NO G_PRS 3_
 
 // GPRS credentials
 const char apn[]  PROGMEM = "internet.simfony.net";     // GPRS access point
@@ -109,6 +110,9 @@ const int pinM590Rx      = 3;  // MCU RX
 const int pinM590Tx      = 4;  // MCU TX
 const int pinM590Sleep   = 5;  // Modem low power control
 const int pinM590Power   = 6;  // Modem On/Off control
+
+// Modem-is-ringing flag
+volatile byte ringring   = false;
 
 // Modem and connection client
 SoftwareSerial  SerialAT(pinM590Rx, pinM590Tx); // Software RS232 link to modem
@@ -192,7 +196,7 @@ void rMedIn(int idx, int x) {
   @param hmdt humidity
   @return success
 */
-bool dhtRead(int* temp, int* hmdt) {
+bool dhtRead(int *temp, int *hmdt) {
   byte t = 0, h = 0;
   bool ok = false;
   // First read
@@ -421,7 +425,7 @@ void aprsSendWeather(int temp, int hmdt, int pres, int lux) {
     strncat(aprsPkt, buf, sizeof(buf));
   }
   // Comment (device name)
-  strcat_P(aprsPkt, NODENAME);
+  strcat_P(aprsPkt, DEVICEID);
   strcat_P(aprsPkt, eol);
   aprsSend(aprsPkt);
 }
@@ -431,13 +435,13 @@ void aprsSendWeather(int temp, int hmdt, int pres, int lux) {
   FW0690>APRS,TCPIP*:T#517,173,062,213,002,000,00000000
 
   @param a0 read analog A0
-  @param a1 read analog A1
+  @param dhtt external temperature read by DHT11
   @param rssi GSM RSSI level
   @param vcc voltage
-  @param temp internal temperature
+  @param mcu internal temperature
   @param bits digital inputs
 */
-void aprsSendTelemetry(int a0, int a1, int rssi, int vcc, int temp, byte bits) {
+void aprsSendTelemetry(int a0, int dhtt, int rssi, int vcc, int mcu, byte bits) {
   // Increment the telemetry sequence number, reset it if exceeds 999
   if (++aprsTlmSeq > 999) aprsTlmSeq = 0;
   // Send the telemetry setup if the sequence number is 0
@@ -447,7 +451,7 @@ void aprsSendTelemetry(int a0, int a1, int rssi, int vcc, int temp, byte bits) {
   strcat_P(aprsPkt, aprsPath);
   strcat_P(aprsPkt, PSTR("T"));
   char buf[40];
-  snprintf_P(buf, sizeof(buf), PSTR("#%03d,%03d,%03d,%03d,%03d,%03d,"), aprsTlmSeq, a0, a1, rssi, vcc, temp);
+  snprintf_P(buf, sizeof(buf), PSTR("#%03d,%03d,%03d,%03d,%03d,%03d,"), aprsTlmSeq, a0, dhtt, rssi, vcc, mcu);
   strncat(aprsPkt, buf, sizeof(buf));
   itoa(bits, buf, 2);
   strncat(aprsPkt, buf, sizeof(buf));
@@ -543,6 +547,33 @@ void aprsSendPosition(const char *comment = NULL) {
 }
 
 /**
+  Analog raw reading, after a delay, while sleeping, using interrupt
+
+  @return raw analog read value (long)
+*/
+long readRaw() {
+  // Set the registers
+  ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);   // prescaler of 128
+  ADCSRA |= _BV(ADEN);                              // enable the ADC
+  ADCSRA |= _BV(ADIE);                              // enable interrupt
+  // Wait for voltage to settle
+  delay(10);
+  // Take an ADC reading in sleep mode
+  noInterrupts();
+  // Start conversion
+  ADCSRA |= _BV(ADSC);
+  set_sleep_mode(SLEEP_MODE_ADC);
+  interrupts();
+  // Awake again, reading should be done, but better make sure
+  while (bit_is_set(ADCSRA, ADSC));
+  // Reading register "ADCW" takes care of how to read ADCL and ADCH
+  long wADC = ADCW;
+  // The returned reading
+  return wADC;
+}
+
+
+/**
   Read the analog pin after a delay, while sleeping, using interrupt
 
   @param pin the analog pin
@@ -555,25 +586,9 @@ int readAnalog(uint8_t pin) {
   // Set the analog reference to DEFAULT, select the channel (low 4 bits).
   // This also sets ADLAR (left-adjust result) to 0 (the default).
   ADMUX = _BV(REFS0) | (pin & 0x07);
-  ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);  // prescaler of 128
-  ADCSRA |= _BV(ADEN);  // enable the ADC
-  ADCSRA |= _BV(ADIE);  // enable intterupt
 
-  // Wait for voltage to settle
-  delay(10);
-  // Take an ADC reading in sleep mode
-  noInterrupts();
-  // Start conversion
-  ADCSRA |= _BV(ADSC);
-  set_sleep_mode(SLEEP_MODE_ADC);
-  interrupts();
-
-  // Awake again, reading should be done, but better make sure
-  // maybe the timer interrupt fired
-  while (bit_is_set(ADCSRA, ADSC));
-
-  // Reading register "ADCW" takes care of how to read ADCL and ADCH.
-  long wADC = ADCW;
+  // Raw analog read
+  long wADC = readRaw();
 
   // The returned reading
   return (int)(wADC);
@@ -589,25 +604,9 @@ int readAnalog(uint8_t pin) {
 int readMCUTemp() {
   // Set the internal reference and mux.
   ADMUX = (_BV(REFS1) | _BV(REFS0) | _BV(MUX3));
-  ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);  // prescaler of 128
-  ADCSRA |= _BV(ADEN);  // enable the ADC
-  ADCSRA |= _BV(ADIE);  // enable intterupt
 
-  // Wait for voltage to settle
-  delay(10);
-  // Take an ADC reading in sleep mode
-  noInterrupts();
-  // Start conversion
-  ADCSRA |= _BV(ADSC);
-  set_sleep_mode(SLEEP_MODE_ADC);
-  interrupts();
-
-  // Awake again, reading should be done, but better make sure
-  // maybe the timer interrupt fired
-  while (bit_is_set(ADCSRA, ADSC));
-
-  // Reading register "ADCW" takes care of how to read ADCL and ADCH.
-  long wADC = ADCW;
+  // Raw analog read
+  long wADC = readRaw();
 
   // The returned temperature is in hundreds degrees Celsius; calibrated
   return (int)(84.87 * wADC - 25840);
@@ -621,25 +620,9 @@ int readMCUTemp() {
 int readVcc() {
   // Set the reference to Vcc and the measurement to the internal 1.1V reference
   ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
-  ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2);  // prescaler of 128
-  ADCSRA |= _BV(ADEN);  // enable the ADC
-  ADCSRA |= _BV(ADIE);  // enable intterupt
 
-  // Wait for voltage to settle
-  delay(10);
-  // Take an ADC reading in sleep mode
-  noInterrupts();
-  // Start conversion
-  ADCSRA |= _BV(ADSC);
-  set_sleep_mode(SLEEP_MODE_ADC);
-  interrupts();
-
-  // Awake again, reading should be done, but better make sure
-  // maybe the timer interrupt fired
-  while (bit_is_set(ADCSRA, ADSC));
-
-  // Reading register "ADCW" takes care of how to read ADCL and ADCH.
-  long wADC = ADCW;
+  // Raw analog read
+  long wADC = readRaw();
 
   // Return Vcc in mV; 1125300 = 1.1 * 1024 * 1000
   // 1.1V calibration: 1.074
@@ -733,6 +716,13 @@ void linkFailed() {
 }
 
 /**
+  Set a flag to mark the modem is ringing
+*/
+void modemRing() {
+  ringring = true;
+}
+
+/**
   Print a character array from program memory
 */
 void print_P(const char *str) {
@@ -758,7 +748,8 @@ void setup() {
 
   // Set GSM module baud rate
   SerialAT.begin(9600);
-  // Initialize the modem, restart if failed (total time to restart: 30s)
+  // Initialize the modem, restart if failed (total time to restart: 60s)
+  // TODO Long wait, split it to allow the watchdog supervise
   if (GPRS_Modem.begin(&SerialAT, SIM_PRESENT)) {
     // Start time sync
     timeUNIX();
@@ -775,7 +766,7 @@ void setup() {
   }
 
   // BMP280
-  atmo_ok = atmo.begin(0x76);
+  atmo_ok = atmo.begin(atmoAddr);
   if (atmo_ok) Serial.println(F("BMP280 sensor detected"));
   else         Serial.println(F("BMP280 sensor missing"));
 
@@ -814,6 +805,10 @@ void setup() {
   // Send the modem to sleep
   modemSleep(true, true);
 
+  // RING pin and interrupt
+  pinMode(pinM590Ring, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(pinM590Ring), modemRing, LOW);
+
   // Enable the watchdog
   wdt_enable(WDTO_8S);
 }
@@ -822,6 +817,15 @@ void setup() {
   Main Arduino loop
 */
 void loop() {
+  // Check if the modem is ringing: emergency reset
+  // TODO Check the signal
+  if (ringring) {
+    // The modem should be on, since it is signalling, turn it off
+    modemOnOff();
+    // Reset the MCU (in 4s)
+    softReset(WDTO_4S);
+  }
+
   // Read the sensors
   if (millis() >= snsNextTime) {
     // Count to check if we need to send the APRS data
@@ -837,6 +841,7 @@ void loop() {
     }
     // Set the telemetry bit 7 if the station is being probed
     if (PROBE) aprsTlmBits = B10000000;
+    else       aprsTlmBits = B00000000;
 
 #ifdef DEBUG
     Serial.print(F("Sensor reading "));
@@ -853,6 +858,8 @@ void loop() {
 
     // Reset the watchdog
     wdt_reset();
+    // Check again whether the sensor is present
+    if (!atmo_ok) atmo_ok = atmo.begin(atmoAddr);
     // Read BMP280
     if (atmo_ok) {
       float temp, pres;
@@ -866,12 +873,14 @@ void loop() {
       rMedIn(MD_PRES, (int)(pres * altCorr / 10.0));  // Store directly sea level in dPa
     }
     else {
-      rMedIn(MD_TEMP, -1);                            // Store an invalid value if no sensor
+      rMedIn(MD_TEMP, -500);                          // Store an invalid value if no sensor
       rMedIn(MD_PRES, -1);                            // Store an invalid value if no sensor
     }
 
     // Reset the watchdog
     wdt_reset();
+    // Check again whether the sensor is present
+    if (!dht_ok) dht_ok = dht.read(pinDHT, NULL, NULL, NULL) == 0;
     // Read DHT11
     if (dht_ok) {
       int dhtTemp = 0, dhtHmdt = 0;
@@ -890,6 +899,12 @@ void loop() {
 
     // Reset the watchdog
     wdt_reset();
+    // Check again whether the sensor is present
+    if (!light_ok) {
+      Wire.beginTransmission(lightAddr);
+      light_ok = Wire.endTransmission() == 0;
+    }
+    // Read BH1750
     if (light_ok) {
       // Set the bit 5 to show the sensor is present (reverse)
       aprsTlmBits |= B00100000;
@@ -921,9 +936,8 @@ void loop() {
     wdt_reset();
     // Various analog telemetry
     int a0 = readAnalog(A0);
-    int a1 = readAnalog(A1);
     // Add to round median filter, mV (a / 1024 * Vcc)
-    rMedIn(MD_A0, (vcc * (unsigned long)a0) / 1024);
+    rMedIn(MD_A0, (vcc * (unsigned long)a0) >> 10);
 
     // Upper part
     // 500 / R(kO); R = R0(1024 / x - 1)
