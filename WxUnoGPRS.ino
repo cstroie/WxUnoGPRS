@@ -54,7 +54,7 @@
 
 // Device name and software version
 const char NODENAME[] PROGMEM = "WxUnoGPRS";
-const char VERSION[]  PROGMEM = "3.5";
+const char VERSION[]  PROGMEM = "3.6";
 bool       PROBE              = true;                   // True if the station is being probed
 const char DEVICEID[] PROGMEM = "tAUG3";                // t_hing A_rduino U_NO G_PRS 3_
 
@@ -85,6 +85,9 @@ const char aprsTlmBITS[]  PROGMEM = ":BITS.10001111, ";
 const char eol[]          PROGMEM = "\r\n";
 
 char       aprsPkt[100]           = "";     // The APRS packet buffer, largest packet is 82 for v2.1
+
+// Timed debug reports
+unsigned long dbgNext               = 0UL;                    // Next time to report
 
 // Time synchronization and keeping
 const char    timeServer[] PROGMEM  = "utcnist.colorado.edu";  // Time server address to connect to (RFC868)
@@ -145,6 +148,13 @@ bool                light_ok    = false;                                  // The
 SimpleDHT11         dht;                                                  // The DHT11 temperature/humidity sensor
 bool                dht_ok      = false;                                  // The temperature/humidity sensor presence flag
 const int           pinDHT      = 16;                                     // Temperature/humidity sensor input pin
+
+// Various
+const char pstrD[]  PROGMEM = "%d";
+const char pstrDD[] PROGMEM = "%d.%d";
+const char pstrSP[] PROGMEM = " ";
+const char pstrCL[] PROGMEM = ":";
+const char pstrSL[] PROGMEM = "/";
 
 // Function prototypes
 void modemSleep(bool enable, bool initial = false);
@@ -326,6 +336,28 @@ unsigned long timeSync() {
   // Convert 1900 epoch to 1970 Unix time, if read data is valid
   if (!bytes) return (unsigned long)uxtm.t - 2208988800UL;
   else        return 0UL;
+}
+
+/**
+  Get the uptime
+
+  @param buf character array to return the text to
+  @param len the maximum length of the character array
+  @return uptime in seconds
+*/
+unsigned long uptime(char *buf, size_t len) {
+  // Get the uptime in seconds
+  unsigned long upt = millis() / 1000;
+  // Compute days, hours, minutes and seconds
+  int ss =  upt % 60;
+  int mm = (upt % 3600) / 60;
+  int hh = (upt % 86400L) / 3600;
+  int dd =  upt / 86400L;
+  // Create the formatted time
+  if (dd == 1) snprintf_P(buf, len, PSTR("%d day, %02d:%02d:%02d"),  dd, hh, mm, ss);
+  else         snprintf_P(buf, len, PSTR("%d days, %02d:%02d:%02d"), dd, hh, mm, ss);
+  // Return the uptime in seconds
+  return upt;
 }
 
 /**
@@ -547,6 +579,39 @@ void aprsSendPosition(const char *comment = NULL) {
 }
 
 /**
+  Send an APRS message
+
+  @param dest the message destination, own call sign if empty
+  @param title the message title, if not empty
+  @param message the message body
+*/
+void aprsSendMessage(const char *dest, const char *title, const char *message) {
+  // The object's call sign has to be padded with spaces until 9 chars long
+  const int padSize = 9;
+  char padCallSign[padSize] = " ";
+  // Check if the destination is specified
+  if (dest == NULL) strcpy_P(padCallSign, aprsCallSign);  // Copy the own call sign from PROGMEM
+  else              strncpy(padCallSign, dest, padSize);  // Use the specified destination
+  // Pad with spaces, then make sure it ends with '\0'
+  for (int i = strlen(padCallSign); i < padSize; i++)
+    padCallSign[i] = ' ';
+  padCallSign[padSize] = '\0';
+  // Create the header of the packet
+  strcpy_P(aprsPkt, aprsCallSign);
+  strcat_P(aprsPkt, aprsPath);
+  strcat_P(aprsPkt, pstrCL);
+  // Message destination
+  strncat(aprsPkt, padCallSign, padSize);
+  strcat_P(aprsPkt, pstrCL);
+  // Message title
+  if (title != NULL) strncat(aprsPkt, title, 8);
+  // The body of the message, maximum size is 45, including the title
+  strncat(aprsPkt, message, 40);
+  strcat_P(aprsPkt, eol);
+  aprsSend(aprsPkt);
+}
+
+/**
   Analog raw reading, after a delay, while sleeping, using interrupt
 
   @return raw analog read value (long)
@@ -624,7 +689,7 @@ int readVcc() {
   // Raw analog read
   long wADC = readRaw();
 
-  // Return Vcc in mV; 1125300 = 1.1 * 1024 * 1000
+  // Return Vcc in mV; 1126400 = 1.1 * 1024 * 1000
   // 1.1V calibration: 1.074
   return (int)(1099776UL / wADC);
 }
@@ -975,6 +1040,16 @@ void loop() {
                             rMedOut(MD_VCC) / 4 - 1125,
                             rMedOut(MD_MCU) / 100 + 100,
                             aprsTlmBits);
+          // Hourly debug reports
+          if (millis() >= dbgNext) {
+            // Report again in one hour
+            dbgNext += 3600000UL;
+            // Uptime in seconds and text
+            char upt[32] = "";
+            unsigned long ups = uptime(upt, sizeof(upt));
+            // Send the uptime, as message
+            aprsSendMessage(NULL, "UPTM.", upt);
+          }
           //aprsSendStatus("Fine weather");
           // Close the connection
           GPRS_Client.stop();
