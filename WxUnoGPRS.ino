@@ -45,7 +45,7 @@
 #include <Adafruit_BMP280.h>
 #include <BH1750.h>
 
-// DHT11 sensor
+// DHT22 sensor
 #include <SimpleDHT.h>
 
 // GPRS
@@ -144,8 +144,8 @@ bool                atmo_ok     = false;                                  // The
 const byte          lightAddr   = 0x23;                                   // The illuminance sensor I2C address
 BH1750              light(lightAddr);                                     // The illuminance sensor
 bool                light_ok    = false;                                  // The illuminance sensor presence flag
-// DHT11
-SimpleDHT11         dht;                                                  // The DHT11 temperature/humidity sensor
+// DHT22
+SimpleDHT22         dht;                                                  // The DHT22 temperature/humidity sensor
 bool                dht_ok      = false;                                  // The temperature/humidity sensor presence flag
 const int           pinDHT      = 16;                                     // Temperature/humidity sensor input pin
 
@@ -200,25 +200,20 @@ void rMedIn(int idx, int x) {
 }
 
 /**
-  Read the DHT11 sensor
+  Read the DHT22 sensor
 
   @param temp temperature
   @param hmdt humidity
   @return success
 */
 bool dhtRead(int *temp, int *hmdt) {
-  byte t = 0, h = 0;
+  float t = 0;
+  float h = 0;
   bool ok = false;
-  // First read
-  if (dht.read(pinDHT, NULL, NULL, NULL) == 0) {
-    // Wait a bit and read again
-    delay(2000);
-    // Second read
-    if (dht.read(pinDHT, &t, &h, NULL) == 0) {
-      if (temp) *temp = (int)t;
-      if (hmdt) *hmdt = (int)h;
-      ok = true;
-    }
+  if ((dht.read2(pinDHT, &t, &h, NULL)) == SimpleDHTErrSuccess) {
+    *temp = (int)t;
+    *hmdt = (int)h;
+    ok = true;
   }
   return ok;
 }
@@ -467,7 +462,7 @@ void aprsSendWeather(int temp, int hmdt, int pres, int lux) {
   FW0690>APRS,TCPIP*:T#517,173,062,213,002,000,00000000
 
   @param a0 read analog A0
-  @param dhtt external temperature read by DHT11
+  @param dhtt external temperature read by DHT22
   @param rssi GSM RSSI level
   @param vcc voltage
   @param mcu internal temperature
@@ -835,10 +830,10 @@ void setup() {
   if (atmo_ok) Serial.println(F("BMP280 sensor detected"));
   else         Serial.println(F("BMP280 sensor missing"));
 
-  // DHT11
-  dht_ok = dht.read(pinDHT, NULL, NULL, NULL) == 0;
-  if (dht_ok) Serial.println(F("DHT11  sensor detected"));
-  else        Serial.println(F("DHT11  sensor missing"));
+  // DHT22
+  dht_ok = dht.read(pinDHT, NULL, NULL, NULL) == SimpleDHTErrSuccess;
+  if (dht_ok) Serial.println(F("DHT22  sensor detected"));
+  else        Serial.println(F("DHT22  sensor missing"));
 
   // BH1750
   Wire.beginTransmission(lightAddr);
@@ -945,8 +940,8 @@ void loop() {
     // Reset the watchdog
     wdt_reset();
     // Check again whether the sensor is present
-    if (!dht_ok) dht_ok = dht.read(pinDHT, NULL, NULL, NULL) == 0;
-    // Read DHT11
+    if (!dht_ok) dht_ok = dht.read(pinDHT, NULL, NULL, NULL) == SimpleDHTErrSuccess;
+    // Read DHT22
     if (dht_ok) {
       int dhtTemp = 0, dhtHmdt = 0;
       // Set the bit 4 to show the sensor is present (reverse)
